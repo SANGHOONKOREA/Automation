@@ -26,14 +26,13 @@ function addSortIndicatorStyles() {
  *  Firebase 초기화
  * ===============================**/
 const firebaseConfig = {
-  apiKey: "AIzaSyCoOg2HPjk-oEhtVrLv3hH-3VLCwa2MAfE",
-  authDomain: "sanghoon-d8f1c.firebaseapp.com",
-  databaseURL: "https://sanghoon-d8f1c-default-rtdb.firebaseio.com",
-  projectId: "sanghoon-d8f1c",
-  storageBucket: "sanghoon-d8f1c.appspot.com",
-  messagingSenderId: "495391900753",
-  appId: "1:495391900753:web:b0d708eeca64fafe562470",
-  measurementId: "G-J2E22BW61H"
+  apiKey: "AIzaSyB7hRLfG3Ebs1V_TZ2mjOpU5D-kir8eqGk",
+  authDomain: "automation-ff7b0.firebaseapp.com",
+  databaseURL: "https://automation-ff7b0-default-rtdb.firebaseio.com",
+  projectId: "automation-ff7b0",
+  storageBucket: "automation-ff7b0.firebasestorage.app",
+  messagingSenderId: "880510978339",
+  appId: "1:880510978339:web:2c638e3c02fc4df71de496"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
