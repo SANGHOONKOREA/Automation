@@ -1213,7 +1213,7 @@ td button[style*="background:#007bff"]:hover {
 
 /* 테이블 셀 최소폭 설정 - 기본/확장 뷰에 따른 조정 */
 th[data-field="공번"], td[data-field="공번"] { min-width: 120px; }
-th[data-field="공사"], td[data-field="공사"] { min-width: 80px; }
+th[data-field="시스템"], td[data-field="시스템"] { min-width: 80px; }
 th[data-field="imo"], td[data-field="imo"] { min-width: 120px; }
 th[data-field="api_name"], td[data-field="api_name"] { min-width: 140px; }
 th[data-field="api_owner"], td[data-field="api_owner"] { min-width: 160px; }
@@ -1222,13 +1222,9 @@ th[data-field="hull"], td[data-field="hull"] { min-width: 90px; }
 th[data-field="shipName"], td[data-field="shipName"] { min-width: 180px; }
 th[data-field="repMail"], td[data-field="repMail"] { min-width: 180px; }
 th[data-field="shipType"], td[data-field="shipType"] { min-width: 80px; }
-th[data-field="scale"], td[data-field="scale"] { min-width: 80px; }
-th[data-field="구분"], td[data-field="구분"] { min-width: 50px; }
+th[data-field="project"], td[data-field="project"] { min-width: 120px; }
 th[data-field="shipowner"], td[data-field="shipowner"] { min-width: 200px; }
-th[data-field="major"], td[data-field="major"] { min-width: 120px; }
-th[data-field="group"], td[data-field="group"] { min-width: 50px; }
 th[data-field="shipyard"], td[data-field="shipyard"] { min-width: 110px; }
-th[data-field="contract"], td[data-field="contract"] { min-width: 100px; }
 th[data-field="asType"], td[data-field="asType"] { min-width: 90px; }
 th[data-field="delivery"], td[data-field="delivery"] { min-width: 120px; }
 th[data-field="warranty"], td[data-field="warranty"] { min-width: 120px; }
@@ -1248,6 +1244,10 @@ th[data-field="경과일"], td[data-field="경과일"] { min-width: 60px; }
 th[data-field="정상지연"], td[data-field="정상지연"] { min-width: 60px; }
 th[data-field="지연 사유"], td[data-field="지연 사유"] { min-width: 200px; }
 th[data-field="수정일"], td[data-field="수정일"] { min-width: 120px; }
+th[data-field="hwType"], td[data-field="hwType"],
+th[data-field="software"], td[data-field="software"],
+th[data-field="cpuRomVer"], td[data-field="cpuRomVer"],
+th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
 
 /* =================================
    하단 버튼 영역 스타일 - 관리자 보안 적용

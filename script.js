@@ -98,25 +98,25 @@ const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 
 // 기본 테이블 열 정의
 const basicColumns = [
-  'checkbox', '공번', '공사', 'imo', 'hull', 'shipName', 'shipowner', 'repMail', 'shipType',
-  'group', 'shipyard', 'contract', 'asType', 'delivery', 'warranty',
+  'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
+  'shipyard', 'asType', 'delivery', 'warranty',
   'manager', '현황', '현황번역', '동작여부', 'historyCount', 'history', 'AS접수일자', '기술적종료일',
-  '경과일', '정상지연', '지연 사유', '수정일'
+  '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
 // 모든 테이블 열 정의
 const allColumns = [
-  'checkbox', '공번', '공사', 'imo', 'api_name', 'api_owner', 'api_manager', 'api_apply',
-  'hull', 'shipName', 'shipowner', 'repMail', 'shipType', 'scale', '구분', 'major',
-  'group', 'shipyard', 'contract', 'asType', 'delivery', 'warranty', 'prevManager',
+  'checkbox', '공번', '시스템', 'imo', 'api_name', 'api_owner', 'api_manager', 'api_apply',
+  'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
+  'shipyard', 'asType', 'delivery', 'warranty', 'prevManager',
   'manager', '현황', '현황번역', 'ai_summary', '동작여부', '조치계획', '접수내용',
-  '조치결과', 'historyCount', ...historyYearColumns, 'history', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일'
+  '조치결과', 'historyCount', ...historyYearColumns, 'history', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
 // 언어별 텍스트 사전
 const translations = {
   ko: {
-    "AS 현황 관리": "AS 현황 관리",
+    "제어 AS 현황 관리": "제어 AS 현황 관리",
     "사용자": "사용자",
     "로그아웃": "로그아웃",
     "연결 상태": "연결 상태",
@@ -167,13 +167,11 @@ const translations = {
     "유상": "유상",
     "위탁": "위탁",
     "공번": "공번",
-    "공사": "공사",
+    "시스템": "시스템",
     "NAME": "NAME",
     "OWNER": "OWNER",
     "MANAGER": "MANAGER",
     "반영": "반영",
-    "SCALE": "SCALE",
-    "구분": "구분",
     "계약": "계약",
     "인도일": "인도일",
     "보증종료일": "보증종료일",
@@ -191,6 +189,11 @@ const translations = {
     "정상지연": "정상지연",
     "지연 사유": "지연 사유",
     "수정일": "수정일",
+    "PROJECT": "PROJECT",
+    "H/W TYPE": "H/W TYPE",
+    "SOFTWARE": "SOFTWARE",
+    "CPU ROM VER": "CPU ROM VER",
+    "RAU ROM VER": "RAU ROM VER",
     "변경 이력": "변경 이력",
     "사용자 관리": "사용자 관리",
     "API 설정 관리": "API 설정 관리",
@@ -205,7 +208,7 @@ const translations = {
     "관리자 비밀번호": "관리자 비밀번호"
   },
   en: {
-    "AS 현황 관리": "AS Status Management",
+    "제어 AS 현황 관리": "Control AS Status Management",
     "사용자": "User",
     "로그아웃": "Logout",
     "연결 상태": "Connection Status",
@@ -257,7 +260,7 @@ const translations = {
     "유상": "Paid",
     "위탁": "Consignment",
     "공번": "Project No.",
-    "공사": "Work",
+    "시스템": "System",
     "NAME": "NAME",
     "OWNER": "OWNER",
     "MANAGER": "MANAGER",
@@ -281,6 +284,11 @@ const translations = {
     "정상지연": "Normal Delay",
     "지연 사유": "Delay Reason",
     "수정일": "Modified Date",
+    "PROJECT": "Project",
+    "H/W TYPE": "H/W Type",
+    "SOFTWARE": "Software",
+    "CPU ROM VER": "CPU ROM Ver",
+    "RAU ROM VER": "RAU ROM Ver",
     "변경 이력": "Change History",
     "사용자 관리": "User Management",
     "API 설정 관리": "API Configuration",
@@ -295,7 +303,7 @@ const translations = {
     "관리자 비밀번호": "Administrator Password"
   },
   zh: {
-    "AS 현황 관리": "AS状态管理",
+    "제어 AS 현황 관리": "控制AS状态管理",
     "사용자": "用户",
     "로그아웃": "登出",
     "연결 상태": "连接状态",
@@ -346,7 +354,7 @@ const translations = {
     "유상": "有偿",
     "위탁": "委托",
     "공번": "项目编号",
-    "공사": "工程",
+    "시스템": "系统",
     "NAME": "名称",
     "OWNER": "所有者",
     "MANAGER": "管理者",
@@ -370,6 +378,11 @@ const translations = {
     "정상지연": "正常延迟",
     "지연 사유": "延迟原因",
     "수정일": "修改日期",
+    "PROJECT": "项目",
+    "H/W TYPE": "硬件类型",
+    "SOFTWARE": "软件",
+    "CPU ROM VER": "CPU ROM版本",
+    "RAU ROM VER": "RAU ROM版本",
     "변경 이력": "变更历史",
     "사용자 관리": "用户管理",
     "API 설정 관리": "API设置管理",
@@ -384,7 +397,7 @@ const translations = {
     "관리자 비밀번호": "管理员密码"
   },
   ja: {
-    "AS 현황 관리": "ASステータス管理",
+    "제어 AS 현황 관리": "制御AS状況管理",
     "사용자": "ユーザー",
     "로그아웃": "ログアウト",
     "연결 상태": "接続状態",
@@ -435,7 +448,7 @@ const translations = {
     "유상": "有償",
     "위탁": "委託",
     "공번": "工番",
-    "공사": "工事",
+    "시스템": "システム",
     "NAME": "名称",
     "OWNER": "所有者",
     "MANAGER": "管理者",
@@ -459,6 +472,11 @@ const translations = {
     "정상지연": "正常遅延",
     "지연 사유": "遅延理由",
     "수정일": "修正日",
+    "PROJECT": "プロジェクト",
+    "H/W TYPE": "ハードウェア種別",
+    "SOFTWARE": "ソフトウェア",
+    "CPU ROM VER": "CPU ROMバージョン",
+    "RAU ROM VER": "RAU ROMバージョン",
     "변경 이력": "変更履歴",
     "사용자 관리": "ユーザー管理",
     "API 설정 관리": "API設定管理",
@@ -649,13 +667,13 @@ setupOperationStatusFilters();
 // 개선된 필터 이벤트 리스너 설정
 function setupFilterEventListeners() {
   const filterInputs = [
-    'filterIMO', 'filterHull', 'filterName', 'filterOwner', 
-    'filterMajor', 'filterRepMail', 'filterManager', 
+    'filterIMO', 'filterHull', 'filterName', 'filterOwner',
+    'filterRepMail', 'filterManager',
     'filterShipType', 'filterShipyard'
   ];
-  
+
   const filterSelects = [
-    'filterGroup', 'filterAsType', 'filterActive'
+    'filterAsType', 'filterActive'
   ];
   
   // 텍스트 입력 필터
@@ -734,9 +752,7 @@ function applyFilters() {
     hull: document.getElementById('filterHull').value.toLowerCase().trim(),
     name: document.getElementById('filterName').value.toLowerCase().trim(),
     owner: document.getElementById('filterOwner').value.toLowerCase().trim(),
-    major: document.getElementById('filterMajor').value.toLowerCase().trim(),
     repMail: document.getElementById('filterRepMail').value.toLowerCase().trim(),
-    group: document.getElementById('filterGroup').value,
     asType: document.getElementById('filterAsType').value,
     manager: document.getElementById('filterManager').value.toLowerCase().trim(),
     active: document.getElementById('filterActive').value,
@@ -763,7 +779,7 @@ function applyFilters() {
     if (!row || !row.uid) return false;
     
     // 최소한의 데이터가 있는지 확인
-    const hasValidData = row.공번 || row.imo || row.hull || row.shipName || row.manager || row.shipowner;
+    const hasValidData = row.공번 || row.시스템 || row.imo || row.hull || row.project || row.shipName || row.manager || row.shipowner;
     if (!hasValidData) return false;
     
     // 경과일 필터 적용
@@ -796,15 +812,7 @@ function applyFilters() {
       return false;
     }
     
-    if (filters.major && !String(row.major || '').toLowerCase().includes(filters.major)) {
-      return false;
-    }
-    
     if (filters.repMail && !String(row.repMail || '').toLowerCase().includes(filters.repMail)) {
-      return false;
-    }
-    
-    if (filters.group && String(row.group || '') !== filters.group) {
       return false;
     }
     
@@ -862,13 +870,6 @@ function applySorting() {
       const aDate = aVal ? new Date(aVal) : new Date(0);
       const bDate = bVal ? new Date(bVal) : new Date(0);
       return sortAsc ? aDate - bDate : bDate - aDate;
-    }
-    
-    // 숫자 필드의 경우
-    if (['group'].includes(sortField)) {
-      const aNum = parseFloat(aVal) || 0;
-      const bNum = parseFloat(bVal) || 0;
-      return sortAsc ? aNum - bNum : bNum - aNum;
     }
     
     // 문자열 필드의 경우
@@ -945,9 +946,7 @@ function clearAllFilters() {
   document.getElementById('filterHull').value = '';
   document.getElementById('filterName').value = '';
   document.getElementById('filterOwner').value = '';
-  document.getElementById('filterMajor').value = '';
   document.getElementById('filterRepMail').value = '';
-  document.getElementById('filterGroup').value = '';
   document.getElementById('filterAsType').value = '';
   document.getElementById('filterManager').value = '';
   document.getElementById('filterActive').value = '';
@@ -1045,23 +1044,19 @@ function renderTableHeaders() {
   const headerDefinitions = {
     'checkbox': { field: null, text: '', isCheckbox: true },
     '공번': { field: '공번', text: '공번' },
-    '공사': { field: '공사', text: '공사' },
+    '시스템': { field: '시스템', text: '시스템' },
     'imo': { field: 'imo', text: 'IMO NO.' },
     'api_name': { field: 'api_name', text: 'NAME' },
     'api_owner': { field: 'api_owner', text: 'OWNER' },
     'api_manager': { field: 'api_manager', text: 'MANAGER' },
     'api_apply': { field: null, text: '반영' },
     'hull': { field: 'hull', text: 'HULL NO.' },
+    'project': { field: 'project', text: 'PROJECT' },
     'shipName': { field: 'shipName', text: 'SHIPNAME' },
+    'shipowner': { field: 'shipowner', text: 'SHIPOWNER' },
     'repMail': { field: 'repMail', text: '호선 대표메일' },
     'shipType': { field: 'shipType', text: 'SHIP TYPE' },
-    'scale': { field: 'scale', text: 'SCALE' },
-    '구분': { field: '구분', text: '구분' },
-    'shipowner': { field: 'shipowner', text: 'SHIPOWNER' },
-    'major': { field: 'major', text: '주요선사' },
-    'group': { field: 'group', text: '그룹' },
     'shipyard': { field: 'shipyard', text: 'SHIPYARD' },
-    'contract': { field: 'contract', text: '계약' },
     'asType': { field: 'asType', text: 'AS 구분' },
     'delivery': { field: 'delivery', text: '인도일' },
     'warranty': { field: 'warranty', text: '보증종료일' },
@@ -1081,7 +1076,11 @@ function renderTableHeaders() {
     '경과일': { field: '경과일', text: '경과일' },
     '정상지연': { field: '정상지연', text: '정상지연' },
     '지연 사유': { field: '지연 사유', text: '지연 사유' },
-    '수정일': { field: '수정일', text: '수정일' }
+    '수정일': { field: '수정일', text: '수정일' },
+    'hwType': { field: 'hwType', text: 'H/W TYPE' },
+    'software': { field: 'software', text: 'SOFTWARE' },
+    'cpuRomVer': { field: 'cpuRomVer', text: 'CPU ROM VER' },
+    'rauRomVer': { field: 'rauRomVer', text: 'RAU ROM VER' }
   };
 
   historyYears.forEach(year => {
@@ -1182,7 +1181,7 @@ function updateUILanguage() {
   
   // 헤더 텍스트
   const h1 = document.querySelector('.header h1');
-  if (h1) h1.textContent = langData["AS 현황 관리"] || "AS 현황 관리";
+  if (h1) h1.textContent = langData["제어 AS 현황 관리"] || "제어 AS 현황 관리";
   
   // 사용자 정보
   const userInfoText = langData["사용자"] || "사용자";
@@ -1326,10 +1325,6 @@ function updateSelectOptions(langData) {
     });
   }
   
-  const groupFilter = document.getElementById('filterGroup');
-  if (groupFilter && groupFilter.options[0]) {
-    groupFilter.options[0].textContent = langData["전체"] || "전체";
-  }
 }
 
 /** ==================================
@@ -2069,7 +2064,7 @@ async function loadData() {
     if (!r || typeof r !== 'object') return;
 
     // 최소한 하나 이상의 필수 필드가 있는지 확인
-    const hasRequiredFields = r.공번 || r.imo || r.hull || r.shipName || r.manager || r.shipowner;
+    const hasRequiredFields = r.공번 || r.공사 || r.시스템 || r.imo || r.hull || r.shipName || r.manager || r.shipowner;
     if (!hasRequiredFields) return;
 
     // uid가 없으면 key를 uid로 설정
@@ -2078,7 +2073,9 @@ async function loadData() {
     // 호환 처리
     if (r["현 담당"] && !r.manager) r.manager = r["현 담당"];
     if (r["SHIPOWNER"] && !r.shipowner) r.shipowner = r["SHIPOWNER"];
-    if (r.group && typeof r.group !== 'string') r.group = String(r.group);
+    if (!('시스템' in r)) r.시스템 = r.공사 || '';
+    if ('공사' in r) delete r.공사;
+    if (!('project' in r)) r.project = '';
     if (!("AS접수일자" in r)) r["AS접수일자"] = "";
     if (!("정상지연" in r)) r["정상지연"] = "";
     if (!("지연 사유" in r)) r["지연 사유"] = "";
@@ -2087,6 +2084,10 @@ async function loadData() {
     if (!("api_owner" in r)) r["api_owner"] = "";
     if (!("api_manager" in r)) r["api_manager"] = "";
     if (!("현황번역" in r)) r["현황번역"] = "";
+    if (!('hwType' in r)) r.hwType = '';
+    if (!('software' in r)) r.software = '';
+    if (!('cpuRomVer' in r)) r.cpuRomVer = '';
+    if (!('rauRomVer' in r)) r.rauRomVer = '';
 
     // 동작여부 값 변환
     if (r.동작여부 === "정상A" || r.동작여부 === "정상B" || r.동작여부 === "유상정상") {
@@ -2274,9 +2275,8 @@ function addNewRow() {
   const now = new Date().toISOString().split('T')[0];
   const obj = {
     uid,
-    공번: '', 공사: '', imo: '', hull: '', shipName: '', repMail: '',
-    shipType: '', scale: '', 구분: '', shipowner: '', major: '', group: '',
-    shipyard: '', contract: '', asType: '유상', delivery: '', warranty: '',
+    공번: '', 시스템: '', imo: '', hull: '', project: '', shipName: '', shipowner: '', repMail: '',
+    shipType: '', shipyard: '', asType: '유상', delivery: '', warranty: '',
     prevManager: '', manager: '', 현황: '', 현황번역: '', 동작여부: '정상',
     조치계획: '', 접수내용: '', 조치결과: '',
     "AS접수일자": '',
@@ -2286,7 +2286,11 @@ function addNewRow() {
     "수정일": now,
     "api_name": '',
     "api_owner": '',
-    "api_manager": ''
+    "api_manager": '',
+    hwType: '',
+    software: '',
+    cpuRomVer: '',
+    rauRomVer: ''
   };
   
   asData.unshift(obj);
@@ -2546,12 +2550,12 @@ function createTableCell(row, columnKey) {
       }
       // 알려진 컬럼인지 확인
       const knownColumns = [
-        '공번', '공사', 'imo', 'api_name', 'api_owner', 'api_manager',
-        'hull', 'shipName', 'repMail', 'shipType', 'scale', '구분',
-        'shipowner', 'major', 'group', 'shipyard', 'contract', 'asType',
+        '공번', '시스템', 'imo', 'api_name', 'api_owner', 'api_manager',
+        'hull', 'project', 'shipName', 'repMail', 'shipType',
+        'shipowner', 'shipyard', 'asType',
         'delivery', 'warranty', 'prevManager', 'manager', '현황', '현황번역',
         '동작여부', '조치계획', '접수내용', '조치결과', 'AS접수일자', '기술적종료일',
-        '지연 사유'
+        '지연 사유', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
       ];
       
       if (knownColumns.includes(columnKey)) {
@@ -3749,14 +3753,35 @@ function downloadExcel() {
       const arr = asData.map(d => {
         const counts = d.historyCounts || { perYear: {}, total: 0 };
         const row = {
-          공번: d.공번, 공사: d.공사, IMO: d.imo, HULL: d.hull, SHIPNAME: d.shipName,
-          SHIPOWNER: d.shipowner, 'API_NAME': d.api_name, 'API_OWNER': d.api_owner, 'API_MANAGER': d.api_manager,
-          '호선 대표메일': d.repMail, 'SHIP TYPE': d.shipType, SCALE: d.scale, 구분: d.구분,
-          주요선사: d.major, 그룹: d.group, SHIPYARD: d.shipyard,
-          계약: d.contract, 'AS 구분': d.asType, 인도일: d.delivery, 보증종료일: d.warranty,
-          '전 담당': d.prevManager, '현 담당': d.manager, 현황: d.현황, 현황번역: d.현황번역, 동작여부: d.동작여부,
-          조치계획: d.조치계획, 접수내용: d.접수내용, 조치결과: d.조치결과,
-          'AS접수건수': counts.total
+          공번: d.공번,
+          시스템: d.시스템,
+          IMO: d.imo,
+          HULL: d.hull,
+          PROJECT: d.project,
+          SHIPNAME: d.shipName,
+          SHIPOWNER: d.shipowner,
+          'API_NAME': d.api_name,
+          'API_OWNER': d.api_owner,
+          'API_MANAGER': d.api_manager,
+          '호선 대표메일': d.repMail,
+          'SHIP TYPE': d.shipType,
+          SHIPYARD: d.shipyard,
+          'AS 구분': d.asType,
+          인도일: d.delivery,
+          보증종료일: d.warranty,
+          '전 담당': d.prevManager,
+          '현 담당': d.manager,
+          현황: d.현황,
+          현황번역: d.현황번역,
+          동작여부: d.동작여부,
+          조치계획: d.조치계획,
+          접수내용: d.접수내용,
+          조치결과: d.조치결과,
+          'AS접수건수': counts.total,
+          'H/W TYPE': d.hwType,
+          SOFTWARE: d.software,
+          'CPU ROM VER': d.cpuRomVer,
+          'RAU ROM VER': d.rauRomVer
         };
         historyYears.forEach(y => {
           row[String(y)] = counts.perYear[y] || 0;
@@ -3857,22 +3882,18 @@ function readExcelFile(file, mode) {
           return {
             uid,
             공번: parseCell(r['공번']),
-            공사: parseCell(r['공사']),
+            시스템: parseCell(r['시스템'] || r['공사']),
             imo: imoValue,
             hull: parseCell(r['HULL']),
+            project: parseCell(r['PROJECT']),
             shipName: parseCell(r['SHIPNAME']),
             api_name: apiData.api_name,        // 보존된 API 데이터 사용
             api_owner: apiData.api_owner,      // 보존된 API 데이터 사용
             api_manager: apiData.api_manager,  // 보존된 API 데이터 사용
             repMail: parseCell(r['호선 대표메일']),
             shipType: parseCell(r['SHIP TYPE']),
-            scale: parseCell(r['SCALE']),
-            구분: parseCell(r['구분']),
             shipowner: parseCell(r['SHIPOWNER']),
-            major: parseCell(r['주요선사']),
-            group: String(parseCell(r['그룹']) || ''),
             shipyard: parseCell(r['SHIPYARD']),
-            contract: parseCell(r['계약']),
             asType: parseCell(r['AS 구분']) || '유상',
             delivery: parseDate(r['인도일'] || ''),
             warranty: parseDate(r['보증종료일'] || ''),
@@ -3888,7 +3909,11 @@ function readExcelFile(file, mode) {
             "기술적종료일": parseDate(r['기술적종료일'] || ''),
             "정상지연": (r['정상지연'] === 'Y') ? 'Y' : '',
             "지연 사유": parseCell(r['지연 사유']),
-            "수정일": parseDate(r['수정일'] || '') || now
+            "수정일": parseDate(r['수정일'] || '') || now,
+            hwType: parseCell(r['H/W TYPE']),
+            software: parseCell(r['SOFTWARE']),
+            cpuRomVer: parseCell(r['CPU ROM VER']),
+            rauRomVer: parseCell(r['RAU ROM VER'])
           };
         });
         
@@ -5873,6 +5898,6 @@ if (window.performance) {
   });
 }
 
-console.log('AS 현황 관리 시스템 스크립트 로드 완료');
+console.log('제어 AS 현황 관리 시스템 스크립트 로드 완료');
 console.log('버전: 3.0.0 (개선된 조회 기능, 실시간 필터링, 성능 최적화)');
 console.log('주요 기능: 다국어 지원, AI 요약, API 연동, 히스토리 관리, 담당자별 현황, 경과일 필터링');
