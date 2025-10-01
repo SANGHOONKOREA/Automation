@@ -126,9 +126,21 @@ async function checkFirebaseAccountExists(email) {
     return { exists: false, methods: [], uid: null };
   }
 
+  const endpointBase = 'https://identitytoolkit.googleapis.com/v1';
+  const keyParam = `?key=${firebaseConfig.apiKey}`;
+
   let registered = false;
   let methods = [];
   let uid = null;
+
+  const safeParseError = async (response) => {
+    const raw = await response.text();
+    try {
+      return JSON.parse(raw);
+    } catch (parseError) {
+      return { raw };
+    }
+  };
 
   try {
     const directMethods = await auth.fetchSignInMethodsForEmail(normalizedEmail);
@@ -142,7 +154,7 @@ async function checkFirebaseAccountExists(email) {
 
   if (!registered) {
     try {
-      const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`,
+      const response = await fetch(`${endpointBase}/accounts:createAuthUri${keyParam}`,
         {
           method: 'POST',
           headers: {
@@ -150,6 +162,7 @@ async function checkFirebaseAccountExists(email) {
           },
           body: JSON.stringify({
             identifier: normalizedEmail,
+            providerId: 'password',
             continueUri: (typeof window !== 'undefined' && window.location && window.location.origin)
               ? window.location.origin
               : `https://${firebaseConfig.authDomain}`
@@ -157,8 +170,11 @@ async function checkFirebaseAccountExists(email) {
         });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.warn('accounts:createAuthUri 요청 실패:', response.status, errorText);
+        const err = await safeParseError(response);
+        const message = err?.error?.message || err?.raw || 'UNKNOWN_ERROR';
+        if (message && !message.includes('EMAIL_NOT_FOUND')) {
+          console.warn('accounts:createAuthUri 요청 실패:', message);
+        }
       } else {
         const data = await response.json();
         const fallbackMethods = data?.allProviders || data?.signinMethods || [];
@@ -175,38 +191,84 @@ async function checkFirebaseAccountExists(email) {
     }
   }
 
-  try {
-    const lookupResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseConfig.apiKey}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email: [normalizedEmail] })
-      });
+  if (!registered) {
+    try {
+      const lookupResponse = await fetch(`${endpointBase}/accounts:lookup${keyParam}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            email: [normalizedEmail],
+            targetProjectId: firebaseConfig.projectId
+          })
+        });
 
-    if (!lookupResponse.ok) {
-      const errorText = await lookupResponse.text();
-      console.warn('accounts:lookup 요청 실패:', lookupResponse.status, errorText);
-    } else {
-      const lookupData = await lookupResponse.json();
-      if (Array.isArray(lookupData?.users) && lookupData.users.length > 0) {
-        const [firstUser] = lookupData.users;
-        registered = true;
-        uid = firstUser?.localId || uid;
+      if (!lookupResponse.ok) {
+        const err = await safeParseError(lookupResponse);
+        const message = err?.error?.message || err?.raw || 'UNKNOWN_ERROR';
+        if (message && !message.includes('EMAIL_NOT_FOUND')) {
+          console.warn('accounts:lookup 요청 실패:', message);
+        }
+      } else {
+        const lookupData = await lookupResponse.json();
+        if (Array.isArray(lookupData?.users) && lookupData.users.length > 0) {
+          const [firstUser] = lookupData.users;
+          registered = true;
+          uid = firstUser?.localId || uid;
 
-        if (!methods.length && Array.isArray(firstUser?.providerUserInfo)) {
-          const providerIds = firstUser.providerUserInfo
-            .map((info) => info?.providerId)
-            .filter(Boolean);
-          if (providerIds.length > 0) {
-            methods = providerIds;
+          if (!methods.length && Array.isArray(firstUser?.providerUserInfo)) {
+            const providerIds = firstUser.providerUserInfo
+              .map((info) => info?.providerId)
+              .filter(Boolean);
+            if (providerIds.length > 0) {
+              methods = providerIds;
+            }
           }
         }
       }
+    } catch (error) {
+      console.error('Firebase 계정 확인 REST(lookup) 호출 오류:', error);
     }
-  } catch (error) {
-    console.error('Firebase 계정 확인 REST(lookup) 호출 오류:', error);
+  }
+
+  if (!registered) {
+    try {
+      const passwordResponse = await fetch(`${endpointBase}/accounts:signInWithPassword${keyParam}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            email: normalizedEmail,
+            password: (typeof crypto !== 'undefined' && crypto.randomUUID)
+              ? crypto.randomUUID()
+              : Math.random().toString(36).slice(2),
+            returnSecureToken: false
+          })
+        });
+
+      if (passwordResponse.ok) {
+        const signInData = await passwordResponse.json();
+        registered = true;
+        uid = signInData?.localId || uid;
+      } else {
+        const err = await safeParseError(passwordResponse);
+        const message = err?.error?.message || err?.raw || '';
+
+        if (typeof message === 'string') {
+          if (message.includes('INVALID_PASSWORD') || message.includes('USER_DISABLED') || message.includes('OPERATION_NOT_ALLOWED')) {
+            registered = true;
+          } else if (!message.includes('EMAIL_NOT_FOUND')) {
+            console.warn('accounts:signInWithPassword 확인 실패:', message);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Firebase 계정 확인 REST(signInWithPassword) 호출 오류:', error);
+    }
   }
 
   return { exists: registered, methods, uid };
@@ -324,6 +386,7 @@ const translations = {
     "전체": "전체",
     "AS진행": "AS진행",
     "담당자": "담당자",
+    "이메일 담당자": "이메일 담당자",
     "선주사": "선주사",
     "사용자 관리": "사용자 관리",
     "AI 설정 관리": "AI 설정 관리",
@@ -413,6 +476,7 @@ const translations = {
     "전체": "All",
     "AS진행": "AS In Progress",
     "담당자": "Manager",
+    "이메일 담당자": "Email Manager",
     "선주사": "Owner",
     "사용자 관리": "User Management",
     "AI 설정 관리": "AI Configuration",
@@ -503,6 +567,7 @@ const translations = {
     "전체": "全部",
     "AS진행": "AS进行中",
     "담당자": "负责人",
+    "이메일 담당자": "邮件负责人",
     "선주사": "船东",
     "사용자 관리": "用户管理",
     "AI 설정 관리": "AI设置管理",
@@ -592,6 +657,7 @@ const translations = {
     "전체": "全体",
     "AS진행": "AS進行中",
     "담당자": "担当者",
+    "이메일 담당자": "メール担当者",
     "선주사": "船主",
     "사용자 관리": "ユーザー管理",
     "AI 설정 관리": "AI設定管理",
@@ -1972,7 +2038,7 @@ function closeUserModal() {
 
   if (emailInput) emailInput.value = '';
   if (managerInput) managerInput.value = '';
-  if (roleSelect) roleSelect.value = '담당자';
+  if (roleSelect) roleSelect.value = '이메일 담당자';
 }
 
 function deleteSelectedUsers() {
@@ -2009,7 +2075,7 @@ async function addNewUser() {
 
   const email = emailInput?.value.trim() || '';
   const managerName = managerInput?.value.trim() || '';
-  const role = roleSelect?.value || '담당자';
+  const role = roleSelect?.value || '이메일 담당자';
 
   if (!email || !email.includes('@')) {
     alert('올바른 이메일을 입력하세요.');
@@ -2068,7 +2134,7 @@ async function addNewUser() {
 
     if (emailInput) emailInput.value = '';
     if (managerInput) managerInput.value = '';
-    if (roleSelect) roleSelect.value = '담당자';
+    if (roleSelect) roleSelect.value = '이메일 담당자';
 
     const refreshedSnap = await db.ref(userPath).once('value');
     userData = convertSnapshotToArray(refreshedSnap.val() || {});
