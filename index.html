@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>AS 현황 관리 (통합 + AI 요약)</title>
+  <title>제어 AS 현황 관리 (통합 + AI 요약)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- 외부 CSS -->
@@ -108,7 +108,7 @@
   <!-- 수정 후 HTML 구조 -->
 <div class="header">
   <div class="header-left">
-    <h1>AS 현황 관리</h1>
+    <h1>제어 AS 현황 관리</h1>
     <!-- 언어 선택 버튼 -->
     <div class="language-selector">
       <button data-lang="ko" class="lang-btn active">한국어</button>
@@ -178,10 +178,6 @@
       <label>SHIPOWNER</label>
       <input type="text" id="filterOwner" oninput="applyFilters()">
     </div>
-    <div class="filter-group">
-      <label>주요선사</label>
-      <input type="text" id="filterMajor" oninput="applyFilters()">
-    </div>
     <!-- 호선 대표메일 필터 추가 -->
     <div class="filter-group">
       <label>호선 대표메일</label>
@@ -196,15 +192,6 @@
     <div class="filter-group">
       <label>SHIPYARD</label>
       <input type="text" id="filterShipyard" oninput="applyFilters()">
-    </div>
-    <div class="filter-group">
-      <label>그룹</label>
-      <select id="filterGroup" onchange="applyFilters()">
-        <option value="">전체</option>
-        <option value="1">1</option><option value="2">2</option>
-        <option value="3">3</option><option value="4">4</option>
-        <option value="5">5</option><option value="6">6</option>
-      </select>
     </div>
     <div class="filter-group">
       <label>AS 구분</label>
@@ -242,7 +229,7 @@
         <tr>
           <th style="width:30px;"><input type="checkbox" id="selectAll"></th>
           <th data-field="공번">공번<div class="col-resizer"></div></th>
-          <th data-field="공사">공사<div class="col-resizer"></div></th>
+          <th data-field="시스템">시스템<div class="col-resizer"></div></th>
           <th data-field="imo">IMO NO.<div class="col-resizer"></div></th>
           <!-- 추가된 API 관련 필드 -->
           <th data-field="api_name">NAME<div class="col-resizer"></div></th>
@@ -251,16 +238,12 @@
           <th>반영<div class="col-resizer"></div></th>
           <!-- 기존 필드 -->
           <th data-field="hull">HULL NO.<div class="col-resizer"></div></th>
+          <th data-field="project">PROJECT<div class="col-resizer"></div></th>
           <th data-field="shipName">SHIPNAME<div class="col-resizer"></div></th>
           <th data-field="repMail">호선 대표메일<div class="col-resizer"></div></th>
           <th data-field="shipType">SHIP TYPE<div class="col-resizer"></div></th>
-          <th data-field="scale">SCALE<div class="col-resizer"></div></th>
-          <th data-field="구분">구분<div class="col-resizer"></div></th>
           <th data-field="shipowner">SHIPOWNER<div class="col-resizer"></div></th>
-          <th data-field="major">주요선사<div class="col-resizer"></div></th>
-          <th data-field="group">그룹<div class="col-resizer"></div></th>
           <th data-field="shipyard">SHIPYARD<div class="col-resizer"></div></th>
-          <th data-field="contract">계약<div class="col-resizer"></div></th>
           <th data-field="asType">AS 구분<div class="col-resizer"></div></th>
           <th data-field="delivery">인도일<div class="col-resizer"></div></th>
           <th data-field="warranty">보증종료일<div class="col-resizer"></div></th>
@@ -285,6 +268,10 @@
           <th data-field="지연 사유">지연 사유<div class="col-resizer"></div></th>
           <!-- 수정일 추가 -->
           <th data-field="수정일">수정일<div class="col-resizer"></div></th>
+          <th data-field="hwType">H/W TYPE<div class="col-resizer"></div></th>
+          <th data-field="software">SOFTWARE<div class="col-resizer"></div></th>
+          <th data-field="cpuRomVer">CPU ROM VER<div class="col-resizer"></div></th>
+          <th data-field="rauRomVer">RAU ROM VER<div class="col-resizer"></div></th>
         </tr>
       </thead>
       <tbody id="asBody"></tbody>
@@ -337,13 +324,25 @@
       </div>
       <hr style="margin:10px 0;">
       <h3>새 사용자 추가</h3>
+      <p style="font-size:0.85em; color:#666; margin-top:-6px;">
+        Firebase Authentication에 등록된 이메일만 추가할 수 있습니다.
+      </p>
       <div class="form-group">
-        <label>사용자명</label>
-        <input type="text" id="newUserName">
+        <label>이메일</label>
+        <input type="email" id="newUserEmail" placeholder="name@example.com">
       </div>
       <div class="form-group">
-        <label>비밀번호</label>
-        <input type="password" id="newUserPw">
+        <label>담당자</label>
+        <input type="text" id="newUserManager" placeholder="담당자 이름">
+      </div>
+      <div class="form-group">
+        <label>권한</label>
+        <select id="newUserRole">
+          <option value="관리자">관리자</option>
+          <option value="담당자" selected>담당자</option>
+          <option value="선주사">선주사</option>
+          <option value="조회">조회</option>
+        </select>
       </div>
       <div class="btn-row">
         <button id="addUserConfirmBtn">추가</button>

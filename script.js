@@ -26,14 +26,13 @@ function addSortIndicatorStyles() {
  *  Firebase 초기화
  * ===============================**/
 const firebaseConfig = {
-  apiKey: "AIzaSyCoOg2HPjk-oEhtVrLv3hH-3VLCwa2MAfE",
-  authDomain: "sanghoon-d8f1c.firebaseapp.com",
-  databaseURL: "https://sanghoon-d8f1c-default-rtdb.firebaseio.com",
-  projectId: "sanghoon-d8f1c",
-  storageBucket: "sanghoon-d8f1c.appspot.com",
-  messagingSenderId: "495391900753",
-  appId: "1:495391900753:web:b0d708eeca64fafe562470",
-  measurementId: "G-J2E22BW61H"
+  apiKey: "AIzaSyB7hRLfG3Ebs1V_TZ2mjOpU5D-kir8eqGk",
+  authDomain: "automation-ff7b0.firebaseapp.com",
+  databaseURL: "https://automation-ff7b0-default-rtdb.firebaseio.com",
+  projectId: "automation-ff7b0",
+  storageBucket: "automation-ff7b0.firebasestorage.app",
+  messagingSenderId: "880510978339",
+  appId: "1:880510978339:web:2c638e3c02fc4df71de496"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
@@ -73,7 +72,140 @@ const aiConfigPath = "as-service/admin/aiConfig";
 const apiConfigPath = "as-service/admin/apiConfig";
 const userMetaPath = 'as-service/user_meta';
 const adminPasswordPath = 'as-service/admin/password';
-const mainUsersPath = 'users';
+const legacyUsersPath = 'users';
+
+function sanitizeKey(value = '') {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[.#$\[\]]/g, '_');
+}
+
+function convertSnapshotToArray(obj = {}) {
+  return Object.entries(obj).map(([key, value]) => ({ key, ...value }));
+}
+
+function extractManagerName(entry = {}) {
+  return entry.managerName || entry.id || entry.username || '';
+}
+
+async function fetchUserDirectory() {
+  try {
+    const primarySnap = await db.ref(userPath).once('value');
+    if (primarySnap.exists()) {
+      return { path: userPath, data: primarySnap.val() || {} };
+    }
+
+    const legacySnap = await db.ref(legacyUsersPath).once('value');
+    return { path: legacyUsersPath, data: legacySnap.val() || {} };
+  } catch (error) {
+    console.error('사용자 디렉토리 조회 오류:', error);
+    return { path: userPath, data: {} };
+  }
+}
+
+async function findUidByEmail(email) {
+  try {
+    const snapshot = await db.ref(userMetaPath).orderByChild('email').equalTo(email).once('value');
+    if (snapshot.exists()) {
+      const val = snapshot.val();
+      const keys = Object.keys(val);
+      if (keys.length > 0) {
+        return keys[0];
+      }
+    }
+  } catch (error) {
+    console.error('UID 조회 오류:', error);
+  }
+  return null;
+}
+
+async function checkFirebaseAccountExists(email) {
+  const normalizedEmail = (email || '').trim().toLowerCase();
+  if (!normalizedEmail) {
+    return { exists: false, methods: [] };
+  }
+
+  try {
+    const methods = await auth.fetchSignInMethodsForEmail(normalizedEmail);
+    if (methods && methods.length > 0) {
+      return { exists: true, methods };
+    }
+  } catch (error) {
+    console.warn('fetchSignInMethodsForEmail 실패:', error);
+  }
+
+  try {
+    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        identifier: normalizedEmail,
+        continueUri: (typeof window !== 'undefined' && window.location && window.location.origin)
+          ? window.location.origin
+          : `https://${firebaseConfig.authDomain}`
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.warn('accounts:createAuthUri 요청 실패:', response.status, errorText);
+      return { exists: false, methods: [] };
+    }
+
+    const data = await response.json();
+    const fallbackMethods = data?.allProviders || data?.signinMethods || [];
+
+    if (data?.registered || (Array.isArray(fallbackMethods) && fallbackMethods.length > 0)) {
+      return { exists: true, methods: fallbackMethods };
+    }
+  } catch (error) {
+    console.error('Firebase 계정 확인 REST 호출 오류:', error);
+  }
+
+  return { exists: false, methods: [] };
+}
+
+async function ensureDefaultAdminUser() {
+  const defaultEmail = 'sanghoon.seo@snsys.net';
+  const safeKey = sanitizeKey(defaultEmail);
+
+  try {
+    const userRef = db.ref(`${userPath}/${safeKey}`);
+    const existingSnap = await userRef.once('value');
+    if (existingSnap.exists()) {
+      return;
+    }
+
+    const { exists } = await checkFirebaseAccountExists(defaultEmail);
+    if (!exists) {
+      console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
+      return;
+    }
+
+    const uid = await findUidByEmail(defaultEmail);
+    const now = new Date().toISOString();
+    const adminEntry = {
+      email: defaultEmail,
+      managerName: 'sanghoon.seo',
+      id: 'sanghoon.seo',
+      role: '관리자',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    if (uid) {
+      adminEntry.uid = uid;
+    }
+
+    await userRef.set(adminEntry);
+    console.log('기본 관리자 계정이 초기화되었습니다.');
+  } catch (error) {
+    console.error('기본 관리자 초기화 오류:', error);
+  }
+}
 const scheduleCheckPath = 'as-service/schedule_checks';
 
 // AI/API 설정 글로벌 변수
@@ -98,25 +230,25 @@ const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 
 // 기본 테이블 열 정의
 const basicColumns = [
-  'checkbox', '공번', '공사', 'imo', 'hull', 'shipName', 'shipowner', 'repMail', 'shipType',
-  'group', 'shipyard', 'contract', 'asType', 'delivery', 'warranty',
+  'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
+  'shipyard', 'asType', 'delivery', 'warranty',
   'manager', '현황', '현황번역', '동작여부', 'historyCount', 'history', 'AS접수일자', '기술적종료일',
-  '경과일', '정상지연', '지연 사유', '수정일'
+  '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
 // 모든 테이블 열 정의
 const allColumns = [
-  'checkbox', '공번', '공사', 'imo', 'api_name', 'api_owner', 'api_manager', 'api_apply',
-  'hull', 'shipName', 'shipowner', 'repMail', 'shipType', 'scale', '구분', 'major',
-  'group', 'shipyard', 'contract', 'asType', 'delivery', 'warranty', 'prevManager',
+  'checkbox', '공번', '시스템', 'imo', 'api_name', 'api_owner', 'api_manager', 'api_apply',
+  'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
+  'shipyard', 'asType', 'delivery', 'warranty', 'prevManager',
   'manager', '현황', '현황번역', 'ai_summary', '동작여부', '조치계획', '접수내용',
-  '조치결과', 'historyCount', ...historyYearColumns, 'history', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일'
+  '조치결과', 'historyCount', ...historyYearColumns, 'history', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
 // 언어별 텍스트 사전
 const translations = {
   ko: {
-    "AS 현황 관리": "AS 현황 관리",
+    "제어 AS 현황 관리": "제어 AS 현황 관리",
     "사용자": "사용자",
     "로그아웃": "로그아웃",
     "연결 상태": "연결 상태",
@@ -167,13 +299,11 @@ const translations = {
     "유상": "유상",
     "위탁": "위탁",
     "공번": "공번",
-    "공사": "공사",
+    "시스템": "시스템",
     "NAME": "NAME",
     "OWNER": "OWNER",
     "MANAGER": "MANAGER",
     "반영": "반영",
-    "SCALE": "SCALE",
-    "구분": "구분",
     "계약": "계약",
     "인도일": "인도일",
     "보증종료일": "보증종료일",
@@ -191,6 +321,11 @@ const translations = {
     "정상지연": "정상지연",
     "지연 사유": "지연 사유",
     "수정일": "수정일",
+    "PROJECT": "PROJECT",
+    "H/W TYPE": "H/W TYPE",
+    "SOFTWARE": "SOFTWARE",
+    "CPU ROM VER": "CPU ROM VER",
+    "RAU ROM VER": "RAU ROM VER",
     "변경 이력": "변경 이력",
     "사용자 관리": "사용자 관리",
     "API 설정 관리": "API 설정 관리",
@@ -205,7 +340,7 @@ const translations = {
     "관리자 비밀번호": "관리자 비밀번호"
   },
   en: {
-    "AS 현황 관리": "AS Status Management",
+    "제어 AS 현황 관리": "Control AS Status Management",
     "사용자": "User",
     "로그아웃": "Logout",
     "연결 상태": "Connection Status",
@@ -257,7 +392,7 @@ const translations = {
     "유상": "Paid",
     "위탁": "Consignment",
     "공번": "Project No.",
-    "공사": "Work",
+    "시스템": "System",
     "NAME": "NAME",
     "OWNER": "OWNER",
     "MANAGER": "MANAGER",
@@ -281,6 +416,11 @@ const translations = {
     "정상지연": "Normal Delay",
     "지연 사유": "Delay Reason",
     "수정일": "Modified Date",
+    "PROJECT": "Project",
+    "H/W TYPE": "H/W Type",
+    "SOFTWARE": "Software",
+    "CPU ROM VER": "CPU ROM Ver",
+    "RAU ROM VER": "RAU ROM Ver",
     "변경 이력": "Change History",
     "사용자 관리": "User Management",
     "API 설정 관리": "API Configuration",
@@ -295,7 +435,7 @@ const translations = {
     "관리자 비밀번호": "Administrator Password"
   },
   zh: {
-    "AS 현황 관리": "AS状态管理",
+    "제어 AS 현황 관리": "控制AS状态管理",
     "사용자": "用户",
     "로그아웃": "登出",
     "연결 상태": "连接状态",
@@ -346,7 +486,7 @@ const translations = {
     "유상": "有偿",
     "위탁": "委托",
     "공번": "项目编号",
-    "공사": "工程",
+    "시스템": "系统",
     "NAME": "名称",
     "OWNER": "所有者",
     "MANAGER": "管理者",
@@ -370,6 +510,11 @@ const translations = {
     "정상지연": "正常延迟",
     "지연 사유": "延迟原因",
     "수정일": "修改日期",
+    "PROJECT": "项目",
+    "H/W TYPE": "硬件类型",
+    "SOFTWARE": "软件",
+    "CPU ROM VER": "CPU ROM版本",
+    "RAU ROM VER": "RAU ROM版本",
     "변경 이력": "变更历史",
     "사용자 관리": "用户管理",
     "API 설정 관리": "API设置管理",
@@ -384,7 +529,7 @@ const translations = {
     "관리자 비밀번호": "管理员密码"
   },
   ja: {
-    "AS 현황 관리": "ASステータス管理",
+    "제어 AS 현황 관리": "制御AS状況管理",
     "사용자": "ユーザー",
     "로그아웃": "ログアウト",
     "연결 상태": "接続状態",
@@ -435,7 +580,7 @@ const translations = {
     "유상": "有償",
     "위탁": "委託",
     "공번": "工番",
-    "공사": "工事",
+    "시스템": "システム",
     "NAME": "名称",
     "OWNER": "所有者",
     "MANAGER": "管理者",
@@ -459,6 +604,11 @@ const translations = {
     "정상지연": "正常遅延",
     "지연 사유": "遅延理由",
     "수정일": "修正日",
+    "PROJECT": "プロジェクト",
+    "H/W TYPE": "ハードウェア種別",
+    "SOFTWARE": "ソフトウェア",
+    "CPU ROM VER": "CPU ROMバージョン",
+    "RAU ROM VER": "RAU ROMバージョン",
     "변경 이력": "変更履歴",
     "사용자 관리": "ユーザー管理",
     "API 설정 관리": "API設定管理",
@@ -484,6 +634,7 @@ document.addEventListener('DOMContentLoaded', () => {
   addSortIndicatorStyles();
   initializeLanguage();
   loadAdminPassword();
+  ensureDefaultAdminUser();
 });
 
 // 모든 이벤트 리스너 등록 함수
@@ -649,13 +800,13 @@ setupOperationStatusFilters();
 // 개선된 필터 이벤트 리스너 설정
 function setupFilterEventListeners() {
   const filterInputs = [
-    'filterIMO', 'filterHull', 'filterName', 'filterOwner', 
-    'filterMajor', 'filterRepMail', 'filterManager', 
+    'filterIMO', 'filterHull', 'filterName', 'filterOwner',
+    'filterRepMail', 'filterManager',
     'filterShipType', 'filterShipyard'
   ];
-  
+
   const filterSelects = [
-    'filterGroup', 'filterAsType', 'filterActive'
+    'filterAsType', 'filterActive'
   ];
   
   // 텍스트 입력 필터
@@ -734,9 +885,7 @@ function applyFilters() {
     hull: document.getElementById('filterHull').value.toLowerCase().trim(),
     name: document.getElementById('filterName').value.toLowerCase().trim(),
     owner: document.getElementById('filterOwner').value.toLowerCase().trim(),
-    major: document.getElementById('filterMajor').value.toLowerCase().trim(),
     repMail: document.getElementById('filterRepMail').value.toLowerCase().trim(),
-    group: document.getElementById('filterGroup').value,
     asType: document.getElementById('filterAsType').value,
     manager: document.getElementById('filterManager').value.toLowerCase().trim(),
     active: document.getElementById('filterActive').value,
@@ -763,7 +912,7 @@ function applyFilters() {
     if (!row || !row.uid) return false;
     
     // 최소한의 데이터가 있는지 확인
-    const hasValidData = row.공번 || row.imo || row.hull || row.shipName || row.manager || row.shipowner;
+    const hasValidData = row.공번 || row.시스템 || row.imo || row.hull || row.project || row.shipName || row.manager || row.shipowner;
     if (!hasValidData) return false;
     
     // 경과일 필터 적용
@@ -796,15 +945,7 @@ function applyFilters() {
       return false;
     }
     
-    if (filters.major && !String(row.major || '').toLowerCase().includes(filters.major)) {
-      return false;
-    }
-    
     if (filters.repMail && !String(row.repMail || '').toLowerCase().includes(filters.repMail)) {
-      return false;
-    }
-    
-    if (filters.group && String(row.group || '') !== filters.group) {
       return false;
     }
     
@@ -862,13 +1003,6 @@ function applySorting() {
       const aDate = aVal ? new Date(aVal) : new Date(0);
       const bDate = bVal ? new Date(bVal) : new Date(0);
       return sortAsc ? aDate - bDate : bDate - aDate;
-    }
-    
-    // 숫자 필드의 경우
-    if (['group'].includes(sortField)) {
-      const aNum = parseFloat(aVal) || 0;
-      const bNum = parseFloat(bVal) || 0;
-      return sortAsc ? aNum - bNum : bNum - aNum;
     }
     
     // 문자열 필드의 경우
@@ -945,9 +1079,7 @@ function clearAllFilters() {
   document.getElementById('filterHull').value = '';
   document.getElementById('filterName').value = '';
   document.getElementById('filterOwner').value = '';
-  document.getElementById('filterMajor').value = '';
   document.getElementById('filterRepMail').value = '';
-  document.getElementById('filterGroup').value = '';
   document.getElementById('filterAsType').value = '';
   document.getElementById('filterManager').value = '';
   document.getElementById('filterActive').value = '';
@@ -1045,23 +1177,19 @@ function renderTableHeaders() {
   const headerDefinitions = {
     'checkbox': { field: null, text: '', isCheckbox: true },
     '공번': { field: '공번', text: '공번' },
-    '공사': { field: '공사', text: '공사' },
+    '시스템': { field: '시스템', text: '시스템' },
     'imo': { field: 'imo', text: 'IMO NO.' },
     'api_name': { field: 'api_name', text: 'NAME' },
     'api_owner': { field: 'api_owner', text: 'OWNER' },
     'api_manager': { field: 'api_manager', text: 'MANAGER' },
     'api_apply': { field: null, text: '반영' },
     'hull': { field: 'hull', text: 'HULL NO.' },
+    'project': { field: 'project', text: 'PROJECT' },
     'shipName': { field: 'shipName', text: 'SHIPNAME' },
+    'shipowner': { field: 'shipowner', text: 'SHIPOWNER' },
     'repMail': { field: 'repMail', text: '호선 대표메일' },
     'shipType': { field: 'shipType', text: 'SHIP TYPE' },
-    'scale': { field: 'scale', text: 'SCALE' },
-    '구분': { field: '구분', text: '구분' },
-    'shipowner': { field: 'shipowner', text: 'SHIPOWNER' },
-    'major': { field: 'major', text: '주요선사' },
-    'group': { field: 'group', text: '그룹' },
     'shipyard': { field: 'shipyard', text: 'SHIPYARD' },
-    'contract': { field: 'contract', text: '계약' },
     'asType': { field: 'asType', text: 'AS 구분' },
     'delivery': { field: 'delivery', text: '인도일' },
     'warranty': { field: 'warranty', text: '보증종료일' },
@@ -1081,7 +1209,11 @@ function renderTableHeaders() {
     '경과일': { field: '경과일', text: '경과일' },
     '정상지연': { field: '정상지연', text: '정상지연' },
     '지연 사유': { field: '지연 사유', text: '지연 사유' },
-    '수정일': { field: '수정일', text: '수정일' }
+    '수정일': { field: '수정일', text: '수정일' },
+    'hwType': { field: 'hwType', text: 'H/W TYPE' },
+    'software': { field: 'software', text: 'SOFTWARE' },
+    'cpuRomVer': { field: 'cpuRomVer', text: 'CPU ROM VER' },
+    'rauRomVer': { field: 'rauRomVer', text: 'RAU ROM VER' }
   };
 
   historyYears.forEach(year => {
@@ -1182,7 +1314,7 @@ function updateUILanguage() {
   
   // 헤더 텍스트
   const h1 = document.querySelector('.header h1');
-  if (h1) h1.textContent = langData["AS 현황 관리"] || "AS 현황 관리";
+  if (h1) h1.textContent = langData["제어 AS 현황 관리"] || "제어 AS 현황 관리";
   
   // 사용자 정보
   const userInfoText = langData["사용자"] || "사용자";
@@ -1326,10 +1458,6 @@ function updateSelectOptions(langData) {
     });
   }
   
-  const groupFilter = document.getElementById('filterGroup');
-  if (groupFilter && groupFilter.options[0]) {
-    groupFilter.options[0].textContent = langData["전체"] || "전체";
-  }
 }
 
 /** ==================================
@@ -1338,27 +1466,23 @@ function updateSelectOptions(langData) {
 auth.onAuthStateChanged(async (user) => {
   if (user) {
     document.getElementById('loginModal').style.display = 'none';
-    
+
     try {
-      const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-      const mainUsers = mainUsersSnapshot.val() || {};
-      
-      let displayName = user.email;
-      for (const uid in mainUsers) {
-        if (mainUsers[uid].email === user.email) {
-          displayName = mainUsers[uid].id || user.email;
-          break;
-        }
-      }
-      
+      const { data: directory } = await fetchUserDirectory();
+      const directoryArray = convertSnapshotToArray(directory);
+
+      const profile = directoryArray.find(entry => (entry.email || '').toLowerCase() === (user.email || '').toLowerCase());
+      const displayName = profile ? (extractManagerName(profile) || user.email) : (user.email || '-');
+      const role = profile?.role || '일반';
+
       document.getElementById('currentUserName').textContent = displayName;
-      
+
       currentUid = user.uid;
       currentUser = {
         uid: user.uid,
         email: user.email,
         name: displayName,
-        role: '일반'
+        role
       };
     } catch (error) {
       console.error('사용자 정보 조회 오류:', error);
@@ -1463,25 +1587,26 @@ function performLogin() {
   auth.signInWithEmailAndPassword(email, pw)
     .then(async (userCredential) => {
       document.getElementById('loginError').textContent = "";
-      
+
       const user = userCredential.user;
       const now = new Date().toISOString();
-      
-      const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-      const mainUsers = mainUsersSnapshot.val() || {};
-      
+
+      const { data: directory } = await fetchUserDirectory();
+      const directoryArray = convertSnapshotToArray(directory);
+
       let userName = '';
-      for (const uid in mainUsers) {
-        if (mainUsers[uid].email === user.email) {
-          userName = mainUsers[uid].id || '';
-          break;
-        }
+      let userRole = '일반';
+
+      const profile = directoryArray.find(entry => (entry.email || '').toLowerCase() === (user.email || '').toLowerCase());
+      if (profile) {
+        userName = extractManagerName(profile) || '';
+        userRole = profile.role || '일반';
       }
-      
+
       if (!userName) {
         userName = user.email.split('@')[0];
       }
-      
+
       await db.ref(`as-service/user_meta/${user.uid}`).update({
         lastLogin: now,
         email: user.email,
@@ -1489,13 +1614,20 @@ function performLogin() {
         userName: userName,
         lastLoginKST: new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString()
       });
-      
+
       console.log('로그인 및 메타 정보 업데이트 완료:', {
         uid: user.uid,
         email: user.email,
         userName: userName,
         lastLogin: now
       });
+
+      currentUser = {
+        uid: user.uid,
+        email: user.email,
+        name: userName,
+        role: userRole
+      };
     })
     .catch(err => {
       console.error("로그인 오류:", err);
@@ -1742,37 +1874,71 @@ function closeForgotPasswordModal() {
 /** ==================================
  *  사용자 관리
  * ===================================*/
-function openUserModal() {
-  db.ref(userPath).once('value').then(snap => {
-    const val = snap.val() || {};
-    userData = Object.entries(val).map(([k, v]) => ({uid: k, ...v}));
+async function openUserModal() {
+  try {
+    const snapshot = await db.ref(userPath).once('value');
+    const val = snapshot.val() || {};
+    userData = convertSnapshotToArray(val);
     renderUserList();
     document.getElementById('userModal').style.display = 'block';
-  });
+  } catch (error) {
+    console.error('사용자 목록 로드 오류:', error);
+    alert('사용자 목록을 불러오지 못했습니다.');
+  }
 }
 
 function renderUserList() {
   const listDiv = document.getElementById('userList');
   listDiv.innerHTML = '';
-  userData.forEach(u => {
-    const row = document.createElement('div');
-    row.style.marginBottom = '4px';
-    const chk = document.createElement('input');
-    chk.type = 'checkbox';
-    chk.dataset.uid = u.uid;
-    chk.style.marginRight = '6px';
-    row.appendChild(chk);
+  if (!userData.length) {
+    const emptyText = document.createElement('p');
+    emptyText.style.cssText = 'font-size:0.9em; color:#666; margin:0;';
+    emptyText.textContent = '등록된 사용자가 없습니다.';
+    listDiv.appendChild(emptyText);
+    return;
+  }
 
-    const txt = document.createElement('span');
-    txt.textContent = `사용자명: ${u.username}, 비번: ${u.password}`;
-    row.appendChild(txt);
+  userData
+    .sort((a, b) => {
+      const nameA = extractManagerName(a);
+      const nameB = extractManagerName(b);
+      return nameA.localeCompare(nameB);
+    })
+    .forEach(u => {
+      const row = document.createElement('div');
+      row.style.marginBottom = '4px';
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
 
-    listDiv.appendChild(row);
-  });
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.dataset.key = u.key;
+      chk.style.marginRight = '6px';
+      row.appendChild(chk);
+
+      const txt = document.createElement('span');
+      const managerName = extractManagerName(u) || '-';
+      const role = u.role || '일반';
+      let createdAt = '';
+      if (u.createdAt && !Number.isNaN(Date.parse(u.createdAt))) {
+        createdAt = ` · 등록일: ${new Date(u.createdAt).toLocaleDateString('ko-KR')}`;
+      }
+      txt.textContent = `이메일: ${u.email || '-'} · 담당자: ${managerName} · 권한: ${role}${createdAt}`;
+      row.appendChild(txt);
+
+      listDiv.appendChild(row);
+    });
 }
 
 function closeUserModal() {
   document.getElementById('userModal').style.display = 'none';
+  const emailInput = document.getElementById('newUserEmail');
+  const managerInput = document.getElementById('newUserManager');
+  const roleSelect = document.getElementById('newUserRole');
+
+  if (emailInput) emailInput.value = '';
+  if (managerInput) managerInput.value = '';
+  if (roleSelect) roleSelect.value = '담당자';
 }
 
 function deleteSelectedUsers() {
@@ -1785,58 +1951,85 @@ function deleteSelectedUsers() {
 
   const updates = {};
   cks.forEach(chk => {
-    const uid = chk.dataset.uid;
-    updates[uid] = null;
+    const key = chk.dataset.key;
+    updates[key] = null;
   });
 
   db.ref(userPath).update(updates)
-    .then(() => {
-      return db.ref(userPath).once('value');
-    })
+    .then(() => db.ref(userPath).once('value'))
     .then(snap => {
       const val = snap.val() || {};
-      userData = Object.entries(val).map(([k, v]) => ({uid: k, ...v}));
+      userData = convertSnapshotToArray(val);
       renderUserList();
+    })
+    .catch(error => {
+      console.error('사용자 삭제 오류:', error);
+      alert('사용자 삭제 중 오류가 발생했습니다.');
     });
 }
 
-function addNewUser() {
-  const uname = document.getElementById('newUserName').value.trim();
-  const upw = document.getElementById('newUserPw').value.trim();
-  if (!uname || !upw) {
-    alert("사용자명/비번 필수 입력");
+async function addNewUser() {
+  const emailInput = document.getElementById('newUserEmail');
+  const managerInput = document.getElementById('newUserManager');
+  const roleSelect = document.getElementById('newUserRole');
+
+  const email = emailInput?.value.trim() || '';
+  const managerName = managerInput?.value.trim() || '';
+  const role = roleSelect?.value || '담당자';
+
+  if (!email || !email.includes('@')) {
+    alert('올바른 이메일을 입력하세요.');
     return;
   }
-  
-  const email = uname.includes('@') ? uname : `${uname}@snsys.com`;
-  
-  auth.createUserWithEmailAndPassword(email, upw)
-    .then((userCredential) => {
-      const user = userCredential.user;
-      
-      return db.ref(`${userPath}/${user.uid}`).set({
-        username: uname,
-        password: upw,
-        email: email,
-        uid: user.uid,
-        createdAt: new Date().toISOString()
-      });
-    })
-    .then(() => {
-      alert("사용자 등록 완료");
-      document.getElementById('newUserName').value = '';
-      document.getElementById('newUserPw').value = '';
-      return db.ref(userPath).once('value');
-    })
-    .then(snap => {
-      const val = snap.val() || {};
-      userData = Object.entries(val).map(([k, v]) => ({uid: k, ...v}));
-      renderUserList();
-    })
-    .catch((error) => {
-      console.error("사용자 추가 오류:", error);
-      alert("사용자 추가 실패: " + error.message);
-    });
+
+  if (!managerName) {
+    alert('담당자 이름을 입력하세요.');
+    return;
+  }
+
+  try {
+    const { exists } = await checkFirebaseAccountExists(email);
+    if (!exists) {
+      alert('Firebase Authentication에 등록된 계정이 아닙니다.');
+      return;
+    }
+
+    const safeKey = sanitizeKey(email);
+    const userRef = db.ref(`${userPath}/${safeKey}`);
+    const existingSnap = await userRef.once('value');
+    const existingData = existingSnap.val();
+
+    const uid = existingData?.uid || await findUidByEmail(email);
+    const now = new Date().toISOString();
+
+    const newEntry = {
+      email,
+      managerName,
+      id: managerName,
+      role,
+      updatedAt: now,
+      createdAt: existingData?.createdAt || now
+    };
+
+    if (uid) {
+      newEntry.uid = uid;
+    }
+
+    await userRef.set(newEntry);
+
+    alert(existingData ? '사용자 정보가 업데이트되었습니다.' : '사용자가 등록되었습니다.');
+
+    if (emailInput) emailInput.value = '';
+    if (managerInput) managerInput.value = '';
+    if (roleSelect) roleSelect.value = '담당자';
+
+    const refreshedSnap = await db.ref(userPath).once('value');
+    userData = convertSnapshotToArray(refreshedSnap.val() || {});
+    renderUserList();
+  } catch (error) {
+    console.error('사용자 추가 오류:', error);
+    alert('사용자 추가 실패: ' + (error.message || '알 수 없는 오류'));
+  }
 }
 
 /** ==================================
@@ -2069,7 +2262,7 @@ async function loadData() {
     if (!r || typeof r !== 'object') return;
 
     // 최소한 하나 이상의 필수 필드가 있는지 확인
-    const hasRequiredFields = r.공번 || r.imo || r.hull || r.shipName || r.manager || r.shipowner;
+    const hasRequiredFields = r.공번 || r.공사 || r.시스템 || r.imo || r.hull || r.shipName || r.manager || r.shipowner;
     if (!hasRequiredFields) return;
 
     // uid가 없으면 key를 uid로 설정
@@ -2078,7 +2271,9 @@ async function loadData() {
     // 호환 처리
     if (r["현 담당"] && !r.manager) r.manager = r["현 담당"];
     if (r["SHIPOWNER"] && !r.shipowner) r.shipowner = r["SHIPOWNER"];
-    if (r.group && typeof r.group !== 'string') r.group = String(r.group);
+    if (!('시스템' in r)) r.시스템 = r.공사 || '';
+    if ('공사' in r) delete r.공사;
+    if (!('project' in r)) r.project = '';
     if (!("AS접수일자" in r)) r["AS접수일자"] = "";
     if (!("정상지연" in r)) r["정상지연"] = "";
     if (!("지연 사유" in r)) r["지연 사유"] = "";
@@ -2087,6 +2282,10 @@ async function loadData() {
     if (!("api_owner" in r)) r["api_owner"] = "";
     if (!("api_manager" in r)) r["api_manager"] = "";
     if (!("현황번역" in r)) r["현황번역"] = "";
+    if (!('hwType' in r)) r.hwType = '';
+    if (!('software' in r)) r.software = '';
+    if (!('cpuRomVer' in r)) r.cpuRomVer = '';
+    if (!('rauRomVer' in r)) r.rauRomVer = '';
 
     // 동작여부 값 변환
     if (r.동작여부 === "정상A" || r.동작여부 === "정상B" || r.동작여부 === "유상정상") {
@@ -2274,9 +2473,8 @@ function addNewRow() {
   const now = new Date().toISOString().split('T')[0];
   const obj = {
     uid,
-    공번: '', 공사: '', imo: '', hull: '', shipName: '', repMail: '',
-    shipType: '', scale: '', 구분: '', shipowner: '', major: '', group: '',
-    shipyard: '', contract: '', asType: '유상', delivery: '', warranty: '',
+    공번: '', 시스템: '', imo: '', hull: '', project: '', shipName: '', shipowner: '', repMail: '',
+    shipType: '', shipyard: '', asType: '유상', delivery: '', warranty: '',
     prevManager: '', manager: '', 현황: '', 현황번역: '', 동작여부: '정상',
     조치계획: '', 접수내용: '', 조치결과: '',
     "AS접수일자": '',
@@ -2286,7 +2484,11 @@ function addNewRow() {
     "수정일": now,
     "api_name": '',
     "api_owner": '',
-    "api_manager": ''
+    "api_manager": '',
+    hwType: '',
+    software: '',
+    cpuRomVer: '',
+    rauRomVer: ''
   };
   
   asData.unshift(obj);
@@ -2546,12 +2748,12 @@ function createTableCell(row, columnKey) {
       }
       // 알려진 컬럼인지 확인
       const knownColumns = [
-        '공번', '공사', 'imo', 'api_name', 'api_owner', 'api_manager',
-        'hull', 'shipName', 'repMail', 'shipType', 'scale', '구분',
-        'shipowner', 'major', 'group', 'shipyard', 'contract', 'asType',
+        '공번', '시스템', 'imo', 'api_name', 'api_owner', 'api_manager',
+        'hull', 'project', 'shipName', 'repMail', 'shipType',
+        'shipowner', 'shipyard', 'asType',
         'delivery', 'warranty', 'prevManager', 'manager', '현황', '현황번역',
         '동작여부', '조치계획', '접수내용', '조치결과', 'AS접수일자', '기술적종료일',
-        '지연 사유'
+        '지연 사유', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
       ];
       
       if (knownColumns.includes(columnKey)) {
@@ -3749,14 +3951,35 @@ function downloadExcel() {
       const arr = asData.map(d => {
         const counts = d.historyCounts || { perYear: {}, total: 0 };
         const row = {
-          공번: d.공번, 공사: d.공사, IMO: d.imo, HULL: d.hull, SHIPNAME: d.shipName,
-          SHIPOWNER: d.shipowner, 'API_NAME': d.api_name, 'API_OWNER': d.api_owner, 'API_MANAGER': d.api_manager,
-          '호선 대표메일': d.repMail, 'SHIP TYPE': d.shipType, SCALE: d.scale, 구분: d.구분,
-          주요선사: d.major, 그룹: d.group, SHIPYARD: d.shipyard,
-          계약: d.contract, 'AS 구분': d.asType, 인도일: d.delivery, 보증종료일: d.warranty,
-          '전 담당': d.prevManager, '현 담당': d.manager, 현황: d.현황, 현황번역: d.현황번역, 동작여부: d.동작여부,
-          조치계획: d.조치계획, 접수내용: d.접수내용, 조치결과: d.조치결과,
-          'AS접수건수': counts.total
+          공번: d.공번,
+          시스템: d.시스템,
+          IMO: d.imo,
+          HULL: d.hull,
+          PROJECT: d.project,
+          SHIPNAME: d.shipName,
+          SHIPOWNER: d.shipowner,
+          'API_NAME': d.api_name,
+          'API_OWNER': d.api_owner,
+          'API_MANAGER': d.api_manager,
+          '호선 대표메일': d.repMail,
+          'SHIP TYPE': d.shipType,
+          SHIPYARD: d.shipyard,
+          'AS 구분': d.asType,
+          인도일: d.delivery,
+          보증종료일: d.warranty,
+          '전 담당': d.prevManager,
+          '현 담당': d.manager,
+          현황: d.현황,
+          현황번역: d.현황번역,
+          동작여부: d.동작여부,
+          조치계획: d.조치계획,
+          접수내용: d.접수내용,
+          조치결과: d.조치결과,
+          'AS접수건수': counts.total,
+          'H/W TYPE': d.hwType,
+          SOFTWARE: d.software,
+          'CPU ROM VER': d.cpuRomVer,
+          'RAU ROM VER': d.rauRomVer
         };
         historyYears.forEach(y => {
           row[String(y)] = counts.perYear[y] || 0;
@@ -3857,22 +4080,18 @@ function readExcelFile(file, mode) {
           return {
             uid,
             공번: parseCell(r['공번']),
-            공사: parseCell(r['공사']),
+            시스템: parseCell(r['시스템'] || r['공사']),
             imo: imoValue,
             hull: parseCell(r['HULL']),
+            project: parseCell(r['PROJECT']),
             shipName: parseCell(r['SHIPNAME']),
             api_name: apiData.api_name,        // 보존된 API 데이터 사용
             api_owner: apiData.api_owner,      // 보존된 API 데이터 사용
             api_manager: apiData.api_manager,  // 보존된 API 데이터 사용
             repMail: parseCell(r['호선 대표메일']),
             shipType: parseCell(r['SHIP TYPE']),
-            scale: parseCell(r['SCALE']),
-            구분: parseCell(r['구분']),
             shipowner: parseCell(r['SHIPOWNER']),
-            major: parseCell(r['주요선사']),
-            group: String(parseCell(r['그룹']) || ''),
             shipyard: parseCell(r['SHIPYARD']),
-            contract: parseCell(r['계약']),
             asType: parseCell(r['AS 구분']) || '유상',
             delivery: parseDate(r['인도일'] || ''),
             warranty: parseDate(r['보증종료일'] || ''),
@@ -3888,7 +4107,11 @@ function readExcelFile(file, mode) {
             "기술적종료일": parseDate(r['기술적종료일'] || ''),
             "정상지연": (r['정상지연'] === 'Y') ? 'Y' : '',
             "지연 사유": parseCell(r['지연 사유']),
-            "수정일": parseDate(r['수정일'] || '') || now
+            "수정일": parseDate(r['수정일'] || '') || now,
+            hwType: parseCell(r['H/W TYPE']),
+            software: parseCell(r['SOFTWARE']),
+            cpuRomVer: parseCell(r['CPU ROM VER']),
+            rauRomVer: parseCell(r['RAU ROM VER'])
           };
         });
         
@@ -4633,64 +4856,101 @@ async function loadManagerScheduleStatus() {
     });
     console.log('전체 담당자 목록:', Array.from(managers));
 
-    const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-    const mainUsers = mainUsersSnapshot.val() || {};
-    console.log('Main users 데이터:', mainUsers);
-    
+    const { data: directory } = await fetchUserDirectory();
+    const directoryArray = convertSnapshotToArray(directory);
+    console.log('사용자 디렉토리:', directoryArray);
+
+    const managerDirectory = {};
+    directoryArray.forEach(entry => {
+      const name = extractManagerName(entry);
+      if (!name) return;
+      managerDirectory[name] = {
+        uid: entry.uid || null,
+        key: entry.key,
+        email: entry.email || null
+      };
+    });
+
     const checksSnapshot = await db.ref(scheduleCheckPath).once('value');
     const scheduleData = checksSnapshot.val() || {};
     console.log('일정 확인 데이터:', scheduleData);
-    
+
     const metaSnapshot = await db.ref('as-service/user_meta').once('value');
     const metaData = metaSnapshot.val() || {};
     console.log('사용자 메타 데이터:', metaData);
     
-    const nameToUid = {};
-    const uidToName = {};
-    
-    for (const uid in mainUsers) {
-      const user = mainUsers[uid];
-      if (user.id) {
-        nameToUid[user.id] = uid;
-        uidToName[uid] = user.id;
-        console.log(`Main users 매핑: ${user.id} -> ${uid}`);
-      }
-    }
-    
+    const scheduleEntries = convertSnapshotToArray(scheduleData);
+    const metaEntries = convertSnapshotToArray(metaData);
+
     managerScheduleStatus = {};
-    
+
     managers.forEach(managerName => {
       console.log(`\n담당자 ${managerName} 처리 중...`);
-      
+
       let lastCheck = null;
       let lastAccess = null;
-      let foundUid = null;
-      
-      if (nameToUid[managerName]) {
-        foundUid = nameToUid[managerName];
-        console.log(`이름 매핑으로 UID 발견: ${foundUid}`);
+      let foundUid = managerDirectory[managerName]?.uid || null;
+      let derivedKey = managerDirectory[managerName]?.key || null;
+      const managerEmail = managerDirectory[managerName]?.email || null;
+
+      if (foundUid && scheduleData[foundUid]) {
+        lastCheck = scheduleData[foundUid].lastCheckDate;
+        derivedKey = foundUid;
+        console.log(`UID로 일정 확인 날짜 획득: ${lastCheck}`);
       }
-      
-      if (foundUid) {
-        if (scheduleData[foundUid]) {
-          lastCheck = scheduleData[foundUid].lastCheckDate;
-          console.log(`일정 확인 날짜: ${lastCheck}`);
-        }
-        
-        if (metaData[foundUid]) {
-          lastAccess = metaData[foundUid].lastLogin;
-          console.log(`마지막 접속: ${lastAccess}`);
+
+      if (!lastCheck && derivedKey && scheduleData[derivedKey]) {
+        lastCheck = scheduleData[derivedKey].lastCheckDate;
+        console.log(`Key로 일정 확인 날짜 획득: ${lastCheck}`);
+      }
+
+      if (!lastCheck) {
+        const matchedSchedule = scheduleEntries.find(entry => {
+          return entry.managerName === managerName ||
+            (managerEmail && entry.checkedBy && entry.checkedBy.toLowerCase() === managerEmail.toLowerCase());
+        });
+
+        if (matchedSchedule) {
+          lastCheck = matchedSchedule.lastCheckDate || null;
+          derivedKey = matchedSchedule.uid || matchedSchedule.key || derivedKey;
+          console.log(`스캔으로 일정 확인 날짜 획득: ${lastCheck}`);
         }
       }
-      
+
+      if (foundUid && metaData[foundUid]) {
+        lastAccess = metaData[foundUid].lastLogin;
+        console.log(`UID로 마지막 접속 획득: ${lastAccess}`);
+      }
+
+      if (!lastAccess && derivedKey && metaData[derivedKey]) {
+        lastAccess = metaData[derivedKey].lastLogin;
+        foundUid = foundUid || derivedKey;
+        console.log(`Key로 마지막 접속 획득: ${lastAccess}`);
+      }
+
+      if (!lastAccess) {
+        const matchedMeta = metaEntries.find(entry => {
+          return (entry.userName && entry.userName === managerName) ||
+            (managerEmail && entry.email && entry.email.toLowerCase() === managerEmail.toLowerCase());
+        });
+
+        if (matchedMeta) {
+          lastAccess = matchedMeta.lastLogin || matchedMeta.lastLoginKST || null;
+          foundUid = foundUid || matchedMeta.key;
+          console.log(`스캔으로 마지막 접속 획득: ${lastAccess}`);
+        }
+      }
+
       managerScheduleStatus[managerName] = {
         name: managerName,
         lastAccess: lastAccess,
         lastCheck: lastCheck,
         scheduleCount: asData.filter(row => row.manager === managerName).length,
-        uid: foundUid
+        uid: foundUid || derivedKey,
+        key: derivedKey,
+        email: managerEmail
       };
-      
+
       console.log(`${managerName} 최종 상태:`, managerScheduleStatus[managerName]);
     });
     
@@ -4831,37 +5091,38 @@ async function confirmScheduleForManager(managerName) {
   
   try {
     const now = new Date().toISOString();
-    
-    let targetUid = null;
-    
+
+    let targetKey = null;
+
     if (managerScheduleStatus[managerName] && managerScheduleStatus[managerName].uid) {
-      targetUid = managerScheduleStatus[managerName].uid;
+      targetKey = managerScheduleStatus[managerName].uid;
     }
-    
-    if (!targetUid) {
-      const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-      const mainUsers = mainUsersSnapshot.val() || {};
-      
-      for (const uid in mainUsers) {
-        if (mainUsers[uid].id === managerName) {
-          targetUid = uid;
-          break;
-        }
+
+    if (!targetKey && managerScheduleStatus[managerName] && managerScheduleStatus[managerName].key) {
+      targetKey = managerScheduleStatus[managerName].key;
+    }
+
+    if (!targetKey) {
+      const { data: directory } = await fetchUserDirectory();
+      const directoryArray = convertSnapshotToArray(directory);
+      const profile = directoryArray.find(entry => extractManagerName(entry) === managerName);
+      if (profile) {
+        targetKey = profile.uid || profile.key || sanitizeKey(profile.email || managerName);
       }
     }
-    
-    if (!targetUid) {
-      targetUid = db.ref().push().key;
+
+    if (!targetKey) {
+      targetKey = sanitizeKey(managerName);
     }
-    
-    await db.ref(`${scheduleCheckPath}/${targetUid}`).set({
+
+    await db.ref(`${scheduleCheckPath}/${targetKey}`).set({
       lastCheckDate: now,
       checkedBy: user.email,
       managerName: managerName,
-      uid: targetUid,
+      uid: targetKey,
       timestamp: firebase.database.ServerValue.TIMESTAMP
     });
-    
+
     alert(`${managerName} 담당자의 일정 확인이 완료되었습니다.`);
     
     loadManagerScheduleStatus();
@@ -4894,40 +5155,47 @@ async function confirmCurrentUserSchedule() {
   try {
     const now = new Date().toISOString();
     const userEmail = user.email;
-    
-    const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-    const mainUsers = mainUsersSnapshot.val() || {};
-    
+
+    const { data: directory } = await fetchUserDirectory();
+    const directoryArray = convertSnapshotToArray(directory);
+
     let userName = '';
-    let userInfo = null;
-    
-    for (const uid in mainUsers) {
-      if (mainUsers[uid].email === userEmail) {
-        userName = mainUsers[uid].id || userEmail.split('@')[0];
-        userInfo = mainUsers[uid];
-        break;
-      }
+    let scheduleKey = user.uid;
+
+    const profile = directoryArray.find(entry => (entry.email || '').toLowerCase() === (userEmail || '').toLowerCase());
+    if (profile) {
+      userName = extractManagerName(profile) || userEmail.split('@')[0];
+      scheduleKey = profile.uid || profile.key || scheduleKey;
     }
-    
+
     if (!userName) {
       userName = userEmail.split('@')[0];
     }
-    
+
     console.log('일정 확인 처리:', {
       uid: user.uid,
       email: userEmail,
       name: userName,
       date: now
     });
-    
-    await db.ref(`${scheduleCheckPath}/${user.uid}`).set({
+
+    const schedulePayload = {
       lastCheckDate: now,
       checkedBy: userEmail,
       managerName: userName,
-      uid: user.uid,
+      uid: scheduleKey,
       timestamp: firebase.database.ServerValue.TIMESTAMP
-    });
-    
+    };
+
+    await db.ref(`${scheduleCheckPath}/${scheduleKey}`).set(schedulePayload);
+
+    if (scheduleKey !== user.uid) {
+      await db.ref(`${scheduleCheckPath}/${user.uid}`).set({
+        ...schedulePayload,
+        uid: user.uid
+      });
+    }
+
     await db.ref(`as-service/user_meta/${user.uid}`).update({
       lastScheduleCheck: now,
       userName: userName,
@@ -5873,6 +6141,6 @@ if (window.performance) {
   });
 }
 
-console.log('AS 현황 관리 시스템 스크립트 로드 완료');
+console.log('제어 AS 현황 관리 시스템 스크립트 로드 완료');
 console.log('버전: 3.0.0 (개선된 조회 기능, 실시간 필터링, 성능 최적화)');
 console.log('주요 기능: 다국어 지원, AI 요약, API 연동, 히스토리 관리, 담당자별 현황, 경과일 필터링');
