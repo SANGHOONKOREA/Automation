@@ -72,7 +72,92 @@ const aiConfigPath = "as-service/admin/aiConfig";
 const apiConfigPath = "as-service/admin/apiConfig";
 const userMetaPath = 'as-service/user_meta';
 const adminPasswordPath = 'as-service/admin/password';
-const mainUsersPath = 'users';
+const legacyUsersPath = 'users';
+
+function sanitizeKey(value = '') {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[.#$\[\]]/g, '_');
+}
+
+function convertSnapshotToArray(obj = {}) {
+  return Object.entries(obj).map(([key, value]) => ({ key, ...value }));
+}
+
+function extractManagerName(entry = {}) {
+  return entry.managerName || entry.id || entry.username || '';
+}
+
+async function fetchUserDirectory() {
+  try {
+    const primarySnap = await db.ref(userPath).once('value');
+    if (primarySnap.exists()) {
+      return { path: userPath, data: primarySnap.val() || {} };
+    }
+
+    const legacySnap = await db.ref(legacyUsersPath).once('value');
+    return { path: legacyUsersPath, data: legacySnap.val() || {} };
+  } catch (error) {
+    console.error('사용자 디렉토리 조회 오류:', error);
+    return { path: userPath, data: {} };
+  }
+}
+
+async function findUidByEmail(email) {
+  try {
+    const snapshot = await db.ref(userMetaPath).orderByChild('email').equalTo(email).once('value');
+    if (snapshot.exists()) {
+      const val = snapshot.val();
+      const keys = Object.keys(val);
+      if (keys.length > 0) {
+        return keys[0];
+      }
+    }
+  } catch (error) {
+    console.error('UID 조회 오류:', error);
+  }
+  return null;
+}
+
+async function ensureDefaultAdminUser() {
+  const defaultEmail = 'sanghoon.seo@snsys.net';
+  const safeKey = sanitizeKey(defaultEmail);
+
+  try {
+    const userRef = db.ref(`${userPath}/${safeKey}`);
+    const existingSnap = await userRef.once('value');
+    if (existingSnap.exists()) {
+      return;
+    }
+
+    const methods = await auth.fetchSignInMethodsForEmail(defaultEmail);
+    if (!methods || methods.length === 0) {
+      console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
+      return;
+    }
+
+    const uid = await findUidByEmail(defaultEmail);
+    const now = new Date().toISOString();
+    const adminEntry = {
+      email: defaultEmail,
+      managerName: 'sanghoon.seo',
+      id: 'sanghoon.seo',
+      role: '관리자',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    if (uid) {
+      adminEntry.uid = uid;
+    }
+
+    await userRef.set(adminEntry);
+    console.log('기본 관리자 계정이 초기화되었습니다.');
+  } catch (error) {
+    console.error('기본 관리자 초기화 오류:', error);
+  }
+}
 const scheduleCheckPath = 'as-service/schedule_checks';
 
 // AI/API 설정 글로벌 변수
@@ -501,6 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
   addSortIndicatorStyles();
   initializeLanguage();
   loadAdminPassword();
+  ensureDefaultAdminUser();
 });
 
 // 모든 이벤트 리스너 등록 함수
@@ -1332,27 +1418,23 @@ function updateSelectOptions(langData) {
 auth.onAuthStateChanged(async (user) => {
   if (user) {
     document.getElementById('loginModal').style.display = 'none';
-    
+
     try {
-      const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-      const mainUsers = mainUsersSnapshot.val() || {};
-      
-      let displayName = user.email;
-      for (const uid in mainUsers) {
-        if (mainUsers[uid].email === user.email) {
-          displayName = mainUsers[uid].id || user.email;
-          break;
-        }
-      }
-      
+      const { data: directory } = await fetchUserDirectory();
+      const directoryArray = convertSnapshotToArray(directory);
+
+      const profile = directoryArray.find(entry => (entry.email || '').toLowerCase() === (user.email || '').toLowerCase());
+      const displayName = profile ? (extractManagerName(profile) || user.email) : (user.email || '-');
+      const role = profile?.role || '일반';
+
       document.getElementById('currentUserName').textContent = displayName;
-      
+
       currentUid = user.uid;
       currentUser = {
         uid: user.uid,
         email: user.email,
         name: displayName,
-        role: '일반'
+        role
       };
     } catch (error) {
       console.error('사용자 정보 조회 오류:', error);
@@ -1457,25 +1539,26 @@ function performLogin() {
   auth.signInWithEmailAndPassword(email, pw)
     .then(async (userCredential) => {
       document.getElementById('loginError').textContent = "";
-      
+
       const user = userCredential.user;
       const now = new Date().toISOString();
-      
-      const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-      const mainUsers = mainUsersSnapshot.val() || {};
-      
+
+      const { data: directory } = await fetchUserDirectory();
+      const directoryArray = convertSnapshotToArray(directory);
+
       let userName = '';
-      for (const uid in mainUsers) {
-        if (mainUsers[uid].email === user.email) {
-          userName = mainUsers[uid].id || '';
-          break;
-        }
+      let userRole = '일반';
+
+      const profile = directoryArray.find(entry => (entry.email || '').toLowerCase() === (user.email || '').toLowerCase());
+      if (profile) {
+        userName = extractManagerName(profile) || '';
+        userRole = profile.role || '일반';
       }
-      
+
       if (!userName) {
         userName = user.email.split('@')[0];
       }
-      
+
       await db.ref(`as-service/user_meta/${user.uid}`).update({
         lastLogin: now,
         email: user.email,
@@ -1483,13 +1566,20 @@ function performLogin() {
         userName: userName,
         lastLoginKST: new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString()
       });
-      
+
       console.log('로그인 및 메타 정보 업데이트 완료:', {
         uid: user.uid,
         email: user.email,
         userName: userName,
         lastLogin: now
       });
+
+      currentUser = {
+        uid: user.uid,
+        email: user.email,
+        name: userName,
+        role: userRole
+      };
     })
     .catch(err => {
       console.error("로그인 오류:", err);
@@ -1736,37 +1826,71 @@ function closeForgotPasswordModal() {
 /** ==================================
  *  사용자 관리
  * ===================================*/
-function openUserModal() {
-  db.ref(userPath).once('value').then(snap => {
-    const val = snap.val() || {};
-    userData = Object.entries(val).map(([k, v]) => ({uid: k, ...v}));
+async function openUserModal() {
+  try {
+    const snapshot = await db.ref(userPath).once('value');
+    const val = snapshot.val() || {};
+    userData = convertSnapshotToArray(val);
     renderUserList();
     document.getElementById('userModal').style.display = 'block';
-  });
+  } catch (error) {
+    console.error('사용자 목록 로드 오류:', error);
+    alert('사용자 목록을 불러오지 못했습니다.');
+  }
 }
 
 function renderUserList() {
   const listDiv = document.getElementById('userList');
   listDiv.innerHTML = '';
-  userData.forEach(u => {
-    const row = document.createElement('div');
-    row.style.marginBottom = '4px';
-    const chk = document.createElement('input');
-    chk.type = 'checkbox';
-    chk.dataset.uid = u.uid;
-    chk.style.marginRight = '6px';
-    row.appendChild(chk);
+  if (!userData.length) {
+    const emptyText = document.createElement('p');
+    emptyText.style.cssText = 'font-size:0.9em; color:#666; margin:0;';
+    emptyText.textContent = '등록된 사용자가 없습니다.';
+    listDiv.appendChild(emptyText);
+    return;
+  }
 
-    const txt = document.createElement('span');
-    txt.textContent = `사용자명: ${u.username}, 비번: ${u.password}`;
-    row.appendChild(txt);
+  userData
+    .sort((a, b) => {
+      const nameA = extractManagerName(a);
+      const nameB = extractManagerName(b);
+      return nameA.localeCompare(nameB);
+    })
+    .forEach(u => {
+      const row = document.createElement('div');
+      row.style.marginBottom = '4px';
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
 
-    listDiv.appendChild(row);
-  });
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.dataset.key = u.key;
+      chk.style.marginRight = '6px';
+      row.appendChild(chk);
+
+      const txt = document.createElement('span');
+      const managerName = extractManagerName(u) || '-';
+      const role = u.role || '일반';
+      let createdAt = '';
+      if (u.createdAt && !Number.isNaN(Date.parse(u.createdAt))) {
+        createdAt = ` · 등록일: ${new Date(u.createdAt).toLocaleDateString('ko-KR')}`;
+      }
+      txt.textContent = `이메일: ${u.email || '-'} · 담당자: ${managerName} · 권한: ${role}${createdAt}`;
+      row.appendChild(txt);
+
+      listDiv.appendChild(row);
+    });
 }
 
 function closeUserModal() {
   document.getElementById('userModal').style.display = 'none';
+  const emailInput = document.getElementById('newUserEmail');
+  const managerInput = document.getElementById('newUserManager');
+  const roleSelect = document.getElementById('newUserRole');
+
+  if (emailInput) emailInput.value = '';
+  if (managerInput) managerInput.value = '';
+  if (roleSelect) roleSelect.value = '담당자';
 }
 
 function deleteSelectedUsers() {
@@ -1779,58 +1903,85 @@ function deleteSelectedUsers() {
 
   const updates = {};
   cks.forEach(chk => {
-    const uid = chk.dataset.uid;
-    updates[uid] = null;
+    const key = chk.dataset.key;
+    updates[key] = null;
   });
 
   db.ref(userPath).update(updates)
-    .then(() => {
-      return db.ref(userPath).once('value');
-    })
+    .then(() => db.ref(userPath).once('value'))
     .then(snap => {
       const val = snap.val() || {};
-      userData = Object.entries(val).map(([k, v]) => ({uid: k, ...v}));
+      userData = convertSnapshotToArray(val);
       renderUserList();
+    })
+    .catch(error => {
+      console.error('사용자 삭제 오류:', error);
+      alert('사용자 삭제 중 오류가 발생했습니다.');
     });
 }
 
-function addNewUser() {
-  const uname = document.getElementById('newUserName').value.trim();
-  const upw = document.getElementById('newUserPw').value.trim();
-  if (!uname || !upw) {
-    alert("사용자명/비번 필수 입력");
+async function addNewUser() {
+  const emailInput = document.getElementById('newUserEmail');
+  const managerInput = document.getElementById('newUserManager');
+  const roleSelect = document.getElementById('newUserRole');
+
+  const email = emailInput?.value.trim() || '';
+  const managerName = managerInput?.value.trim() || '';
+  const role = roleSelect?.value || '담당자';
+
+  if (!email || !email.includes('@')) {
+    alert('올바른 이메일을 입력하세요.');
     return;
   }
-  
-  const email = uname.includes('@') ? uname : `${uname}@snsys.com`;
-  
-  auth.createUserWithEmailAndPassword(email, upw)
-    .then((userCredential) => {
-      const user = userCredential.user;
-      
-      return db.ref(`${userPath}/${user.uid}`).set({
-        username: uname,
-        password: upw,
-        email: email,
-        uid: user.uid,
-        createdAt: new Date().toISOString()
-      });
-    })
-    .then(() => {
-      alert("사용자 등록 완료");
-      document.getElementById('newUserName').value = '';
-      document.getElementById('newUserPw').value = '';
-      return db.ref(userPath).once('value');
-    })
-    .then(snap => {
-      const val = snap.val() || {};
-      userData = Object.entries(val).map(([k, v]) => ({uid: k, ...v}));
-      renderUserList();
-    })
-    .catch((error) => {
-      console.error("사용자 추가 오류:", error);
-      alert("사용자 추가 실패: " + error.message);
-    });
+
+  if (!managerName) {
+    alert('담당자 이름을 입력하세요.');
+    return;
+  }
+
+  try {
+    const methods = await auth.fetchSignInMethodsForEmail(email);
+    if (!methods || methods.length === 0) {
+      alert('Firebase Authentication에 등록된 계정이 아닙니다.');
+      return;
+    }
+
+    const safeKey = sanitizeKey(email);
+    const userRef = db.ref(`${userPath}/${safeKey}`);
+    const existingSnap = await userRef.once('value');
+    const existingData = existingSnap.val();
+
+    const uid = existingData?.uid || await findUidByEmail(email);
+    const now = new Date().toISOString();
+
+    const newEntry = {
+      email,
+      managerName,
+      id: managerName,
+      role,
+      updatedAt: now,
+      createdAt: existingData?.createdAt || now
+    };
+
+    if (uid) {
+      newEntry.uid = uid;
+    }
+
+    await userRef.set(newEntry);
+
+    alert(existingData ? '사용자 정보가 업데이트되었습니다.' : '사용자가 등록되었습니다.');
+
+    if (emailInput) emailInput.value = '';
+    if (managerInput) managerInput.value = '';
+    if (roleSelect) roleSelect.value = '담당자';
+
+    const refreshedSnap = await db.ref(userPath).once('value');
+    userData = convertSnapshotToArray(refreshedSnap.val() || {});
+    renderUserList();
+  } catch (error) {
+    console.error('사용자 추가 오류:', error);
+    alert('사용자 추가 실패: ' + (error.message || '알 수 없는 오류'));
+  }
 }
 
 /** ==================================
@@ -4657,64 +4808,101 @@ async function loadManagerScheduleStatus() {
     });
     console.log('전체 담당자 목록:', Array.from(managers));
 
-    const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-    const mainUsers = mainUsersSnapshot.val() || {};
-    console.log('Main users 데이터:', mainUsers);
-    
+    const { data: directory } = await fetchUserDirectory();
+    const directoryArray = convertSnapshotToArray(directory);
+    console.log('사용자 디렉토리:', directoryArray);
+
+    const managerDirectory = {};
+    directoryArray.forEach(entry => {
+      const name = extractManagerName(entry);
+      if (!name) return;
+      managerDirectory[name] = {
+        uid: entry.uid || null,
+        key: entry.key,
+        email: entry.email || null
+      };
+    });
+
     const checksSnapshot = await db.ref(scheduleCheckPath).once('value');
     const scheduleData = checksSnapshot.val() || {};
     console.log('일정 확인 데이터:', scheduleData);
-    
+
     const metaSnapshot = await db.ref('as-service/user_meta').once('value');
     const metaData = metaSnapshot.val() || {};
     console.log('사용자 메타 데이터:', metaData);
     
-    const nameToUid = {};
-    const uidToName = {};
-    
-    for (const uid in mainUsers) {
-      const user = mainUsers[uid];
-      if (user.id) {
-        nameToUid[user.id] = uid;
-        uidToName[uid] = user.id;
-        console.log(`Main users 매핑: ${user.id} -> ${uid}`);
-      }
-    }
-    
+    const scheduleEntries = convertSnapshotToArray(scheduleData);
+    const metaEntries = convertSnapshotToArray(metaData);
+
     managerScheduleStatus = {};
-    
+
     managers.forEach(managerName => {
       console.log(`\n담당자 ${managerName} 처리 중...`);
-      
+
       let lastCheck = null;
       let lastAccess = null;
-      let foundUid = null;
-      
-      if (nameToUid[managerName]) {
-        foundUid = nameToUid[managerName];
-        console.log(`이름 매핑으로 UID 발견: ${foundUid}`);
+      let foundUid = managerDirectory[managerName]?.uid || null;
+      let derivedKey = managerDirectory[managerName]?.key || null;
+      const managerEmail = managerDirectory[managerName]?.email || null;
+
+      if (foundUid && scheduleData[foundUid]) {
+        lastCheck = scheduleData[foundUid].lastCheckDate;
+        derivedKey = foundUid;
+        console.log(`UID로 일정 확인 날짜 획득: ${lastCheck}`);
       }
-      
-      if (foundUid) {
-        if (scheduleData[foundUid]) {
-          lastCheck = scheduleData[foundUid].lastCheckDate;
-          console.log(`일정 확인 날짜: ${lastCheck}`);
-        }
-        
-        if (metaData[foundUid]) {
-          lastAccess = metaData[foundUid].lastLogin;
-          console.log(`마지막 접속: ${lastAccess}`);
+
+      if (!lastCheck && derivedKey && scheduleData[derivedKey]) {
+        lastCheck = scheduleData[derivedKey].lastCheckDate;
+        console.log(`Key로 일정 확인 날짜 획득: ${lastCheck}`);
+      }
+
+      if (!lastCheck) {
+        const matchedSchedule = scheduleEntries.find(entry => {
+          return entry.managerName === managerName ||
+            (managerEmail && entry.checkedBy && entry.checkedBy.toLowerCase() === managerEmail.toLowerCase());
+        });
+
+        if (matchedSchedule) {
+          lastCheck = matchedSchedule.lastCheckDate || null;
+          derivedKey = matchedSchedule.uid || matchedSchedule.key || derivedKey;
+          console.log(`스캔으로 일정 확인 날짜 획득: ${lastCheck}`);
         }
       }
-      
+
+      if (foundUid && metaData[foundUid]) {
+        lastAccess = metaData[foundUid].lastLogin;
+        console.log(`UID로 마지막 접속 획득: ${lastAccess}`);
+      }
+
+      if (!lastAccess && derivedKey && metaData[derivedKey]) {
+        lastAccess = metaData[derivedKey].lastLogin;
+        foundUid = foundUid || derivedKey;
+        console.log(`Key로 마지막 접속 획득: ${lastAccess}`);
+      }
+
+      if (!lastAccess) {
+        const matchedMeta = metaEntries.find(entry => {
+          return (entry.userName && entry.userName === managerName) ||
+            (managerEmail && entry.email && entry.email.toLowerCase() === managerEmail.toLowerCase());
+        });
+
+        if (matchedMeta) {
+          lastAccess = matchedMeta.lastLogin || matchedMeta.lastLoginKST || null;
+          foundUid = foundUid || matchedMeta.key;
+          console.log(`스캔으로 마지막 접속 획득: ${lastAccess}`);
+        }
+      }
+
       managerScheduleStatus[managerName] = {
         name: managerName,
         lastAccess: lastAccess,
         lastCheck: lastCheck,
         scheduleCount: asData.filter(row => row.manager === managerName).length,
-        uid: foundUid
+        uid: foundUid || derivedKey,
+        key: derivedKey,
+        email: managerEmail
       };
-      
+
       console.log(`${managerName} 최종 상태:`, managerScheduleStatus[managerName]);
     });
     
@@ -4855,37 +5043,38 @@ async function confirmScheduleForManager(managerName) {
   
   try {
     const now = new Date().toISOString();
-    
-    let targetUid = null;
-    
+
+    let targetKey = null;
+
     if (managerScheduleStatus[managerName] && managerScheduleStatus[managerName].uid) {
-      targetUid = managerScheduleStatus[managerName].uid;
+      targetKey = managerScheduleStatus[managerName].uid;
     }
-    
-    if (!targetUid) {
-      const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-      const mainUsers = mainUsersSnapshot.val() || {};
-      
-      for (const uid in mainUsers) {
-        if (mainUsers[uid].id === managerName) {
-          targetUid = uid;
-          break;
-        }
+
+    if (!targetKey && managerScheduleStatus[managerName] && managerScheduleStatus[managerName].key) {
+      targetKey = managerScheduleStatus[managerName].key;
+    }
+
+    if (!targetKey) {
+      const { data: directory } = await fetchUserDirectory();
+      const directoryArray = convertSnapshotToArray(directory);
+      const profile = directoryArray.find(entry => extractManagerName(entry) === managerName);
+      if (profile) {
+        targetKey = profile.uid || profile.key || sanitizeKey(profile.email || managerName);
       }
     }
-    
-    if (!targetUid) {
-      targetUid = db.ref().push().key;
+
+    if (!targetKey) {
+      targetKey = sanitizeKey(managerName);
     }
-    
-    await db.ref(`${scheduleCheckPath}/${targetUid}`).set({
+
+    await db.ref(`${scheduleCheckPath}/${targetKey}`).set({
       lastCheckDate: now,
       checkedBy: user.email,
       managerName: managerName,
-      uid: targetUid,
+      uid: targetKey,
       timestamp: firebase.database.ServerValue.TIMESTAMP
     });
-    
+
     alert(`${managerName} 담당자의 일정 확인이 완료되었습니다.`);
     
     loadManagerScheduleStatus();
@@ -4918,40 +5107,47 @@ async function confirmCurrentUserSchedule() {
   try {
     const now = new Date().toISOString();
     const userEmail = user.email;
-    
-    const mainUsersSnapshot = await db.ref(mainUsersPath).once('value');
-    const mainUsers = mainUsersSnapshot.val() || {};
-    
+
+    const { data: directory } = await fetchUserDirectory();
+    const directoryArray = convertSnapshotToArray(directory);
+
     let userName = '';
-    let userInfo = null;
-    
-    for (const uid in mainUsers) {
-      if (mainUsers[uid].email === userEmail) {
-        userName = mainUsers[uid].id || userEmail.split('@')[0];
-        userInfo = mainUsers[uid];
-        break;
-      }
+    let scheduleKey = user.uid;
+
+    const profile = directoryArray.find(entry => (entry.email || '').toLowerCase() === (userEmail || '').toLowerCase());
+    if (profile) {
+      userName = extractManagerName(profile) || userEmail.split('@')[0];
+      scheduleKey = profile.uid || profile.key || scheduleKey;
     }
-    
+
     if (!userName) {
       userName = userEmail.split('@')[0];
     }
-    
+
     console.log('일정 확인 처리:', {
       uid: user.uid,
       email: userEmail,
       name: userName,
       date: now
     });
-    
-    await db.ref(`${scheduleCheckPath}/${user.uid}`).set({
+
+    const schedulePayload = {
       lastCheckDate: now,
       checkedBy: userEmail,
       managerName: userName,
-      uid: user.uid,
+      uid: scheduleKey,
       timestamp: firebase.database.ServerValue.TIMESTAMP
-    });
-    
+    };
+
+    await db.ref(`${scheduleCheckPath}/${scheduleKey}`).set(schedulePayload);
+
+    if (scheduleKey !== user.uid) {
+      await db.ref(`${scheduleCheckPath}/${user.uid}`).set({
+        ...schedulePayload,
+        uid: user.uid
+      });
+    }
+
     await db.ref(`as-service/user_meta/${user.uid}`).update({
       lastScheduleCheck: now,
       userName: userName,
