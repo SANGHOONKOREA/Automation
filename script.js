@@ -123,49 +123,93 @@ async function findUidByEmail(email) {
 async function checkFirebaseAccountExists(email) {
   const normalizedEmail = (email || '').trim().toLowerCase();
   if (!normalizedEmail) {
-    return { exists: false, methods: [] };
+    return { exists: false, methods: [], uid: null };
   }
 
+  let registered = false;
+  let methods = [];
+  let uid = null;
+
   try {
-    const methods = await auth.fetchSignInMethodsForEmail(normalizedEmail);
-    if (methods && methods.length > 0) {
-      return { exists: true, methods };
+    const directMethods = await auth.fetchSignInMethodsForEmail(normalizedEmail);
+    if (Array.isArray(directMethods) && directMethods.length > 0) {
+      registered = true;
+      methods = directMethods;
     }
   } catch (error) {
     console.warn('fetchSignInMethodsForEmail 실패:', error);
   }
 
-  try {
-    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        identifier: normalizedEmail,
-        continueUri: (typeof window !== 'undefined' && window.location && window.location.origin)
-          ? window.location.origin
-          : `https://${firebaseConfig.authDomain}`
-      })
-    });
+  if (!registered) {
+    try {
+      const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            identifier: normalizedEmail,
+            continueUri: (typeof window !== 'undefined' && window.location && window.location.origin)
+              ? window.location.origin
+              : `https://${firebaseConfig.authDomain}`
+          })
+        });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.warn('accounts:createAuthUri 요청 실패:', response.status, errorText);
-      return { exists: false, methods: [] };
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn('accounts:createAuthUri 요청 실패:', response.status, errorText);
+      } else {
+        const data = await response.json();
+        const fallbackMethods = data?.allProviders || data?.signinMethods || [];
+
+        if (data?.registered || (Array.isArray(fallbackMethods) && fallbackMethods.length > 0)) {
+          registered = true;
+          if (!methods.length) {
+            methods = fallbackMethods;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Firebase 계정 확인 REST(createAuthUri) 호출 오류:', error);
     }
-
-    const data = await response.json();
-    const fallbackMethods = data?.allProviders || data?.signinMethods || [];
-
-    if (data?.registered || (Array.isArray(fallbackMethods) && fallbackMethods.length > 0)) {
-      return { exists: true, methods: fallbackMethods };
-    }
-  } catch (error) {
-    console.error('Firebase 계정 확인 REST 호출 오류:', error);
   }
 
-  return { exists: false, methods: [] };
+  try {
+    const lookupResponse = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseConfig.apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: [normalizedEmail] })
+      });
+
+    if (!lookupResponse.ok) {
+      const errorText = await lookupResponse.text();
+      console.warn('accounts:lookup 요청 실패:', lookupResponse.status, errorText);
+    } else {
+      const lookupData = await lookupResponse.json();
+      if (Array.isArray(lookupData?.users) && lookupData.users.length > 0) {
+        const [firstUser] = lookupData.users;
+        registered = true;
+        uid = firstUser?.localId || uid;
+
+        if (!methods.length && Array.isArray(firstUser?.providerUserInfo)) {
+          const providerIds = firstUser.providerUserInfo
+            .map((info) => info?.providerId)
+            .filter(Boolean);
+          if (providerIds.length > 0) {
+            methods = providerIds;
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Firebase 계정 확인 REST(lookup) 호출 오류:', error);
+  }
+
+  return { exists: registered, methods, uid };
 }
 
 async function ensureDefaultAdminUser() {
@@ -179,13 +223,13 @@ async function ensureDefaultAdminUser() {
       return;
     }
 
-    const { exists } = await checkFirebaseAccountExists(defaultEmail);
+    const { exists, uid: resolvedUid } = await checkFirebaseAccountExists(defaultEmail);
     if (!exists) {
       console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
       return;
     }
 
-    const uid = await findUidByEmail(defaultEmail);
+    const uid = resolvedUid || await findUidByEmail(defaultEmail);
     const now = new Date().toISOString();
     const adminEntry = {
       email: defaultEmail,
@@ -198,6 +242,16 @@ async function ensureDefaultAdminUser() {
 
     if (uid) {
       adminEntry.uid = uid;
+      const metaRef = db.ref(`${userMetaPath}/${uid}`);
+      const metaSnap = await metaRef.once('value');
+      const existingMeta = metaSnap.val() || {};
+      await metaRef.update({
+        email: defaultEmail,
+        managerName: adminEntry.managerName,
+        role: adminEntry.role,
+        createdAt: existingMeta.createdAt || now,
+        updatedAt: now
+      });
     }
 
     await userRef.set(adminEntry);
@@ -1988,7 +2042,7 @@ async function addNewUser() {
   }
 
   try {
-    const { exists } = await checkFirebaseAccountExists(email);
+    const { exists, uid: resolvedUid } = await checkFirebaseAccountExists(email);
     if (!exists) {
       alert('Firebase Authentication에 등록된 계정이 아닙니다.');
       return;
@@ -1999,7 +2053,7 @@ async function addNewUser() {
     const existingSnap = await userRef.once('value');
     const existingData = existingSnap.val();
 
-    const uid = existingData?.uid || await findUidByEmail(email);
+    const uid = existingData?.uid || resolvedUid || await findUidByEmail(email);
     const now = new Date().toISOString();
 
     const newEntry = {
@@ -2016,6 +2070,19 @@ async function addNewUser() {
     }
 
     await userRef.set(newEntry);
+
+    if (uid) {
+      const metaRef = db.ref(`${userMetaPath}/${uid}`);
+      const metaSnap = await metaRef.once('value');
+      const existingMeta = metaSnap.val() || {};
+      await metaRef.update({
+        email,
+        managerName,
+        role,
+        createdAt: existingMeta.createdAt || newEntry.createdAt,
+        updatedAt: now
+      });
+    }
 
     alert(existingData ? '사용자 정보가 업데이트되었습니다.' : '사용자가 등록되었습니다.');
 
