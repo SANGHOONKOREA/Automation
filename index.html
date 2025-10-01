@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>AS 현황 관리 (통합 + AI 요약)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- 외부 CSS -->
+<link rel="stylesheet" href="style.css?v=1.0.3">
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+
+  <!-- XLSX (SheetJS) for Excel -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.16.9/xlsx.full.min.js"></script>
+
+  <!-- Marked.js (마크다운 파서) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+<!-- 로그인 모달 (수정된 버전 - 중복 제거) -->
+<div id="loginModal">
+  <div class="modal-content">
+    <h2>사용자 로그인</h2>
+    <div class="form-group">
+      <label>이메일</label>
+      <input type="email" id="loginUser" placeholder="name@example.com">
+    </div>
+    <div class="form-group">
+      <label>비밀번호</label>
+      <input type="password" id="loginPw" style="font-family: 'Arial', sans-serif; letter-spacing: 2px;">
+      <div class="forgot-pw-link">
+        <a href="#" id="forgotPasswordLink">비밀번호를 잊으셨나요?</a>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="loginConfirmBtn">로그인</button>
+    </div>
+    <p id="loginError" style="color:red; margin-top:5px; font-size:0.85em;"></p>
+  </div>
+</div>
+
+<!-- 비밀번호 찾기 모달 (개선 버전) -->
+<div id="forgotPasswordModal">
+  <div class="modal-content">
+    <span class="modal-close" onclick="closeForgotPasswordModal()">&times;</span>
+    <h2>비밀번호 초기화</h2>
+    <p>가입한 이메일 주소를 입력하시면 비밀번호 재설정 링크를 보내드립니다.</p>
+    <div class="form-group">
+      <label>이메일</label>
+      <input type="email" id="resetEmail" placeholder="name@example.com">
+    </div>
+    <div class="btn-row">
+      <button id="sendResetLinkBtn">초기화 링크 전송</button>
+      <button onclick="closeForgotPasswordModal()">취소</button>
+    </div>
+    <p id="resetEmailStatus"></p>
+  </div>
+</div>
+
+<!-- 최초 로그인 시 비밀번호 변경 모달 (개선 버전) -->
+<div id="changePasswordModal">
+  <div class="modal-content">
+    <span class="modal-close" onclick="document.getElementById('changePasswordModal').style.display='none';">&times;</span>
+    <h2>비밀번호 변경</h2>
+    <p>최초 로그인 시 보안을 위해 비밀번호를 변경해 주세요.</p>
+    <div class="form-group">
+      <label>현재 비밀번호</label>
+      <input type="password" id="currentPassword" placeholder="현재 비밀번호 입력">
+    </div>
+    <div class="form-group">
+      <label>새 비밀번호</label>
+      <input type="password" id="newPassword" placeholder="새 비밀번호 입력 (6자 이상)">
+    </div>
+    <div class="form-group">
+      <label>새 비밀번호 확인</label>
+      <input type="password" id="confirmPassword" placeholder="새 비밀번호 다시 입력">
+    </div>
+    <div class="btn-row">
+      <button id="changePasswordBtn">비밀번호 변경</button>
+      <button onclick="document.getElementById('changePasswordModal').style.display='none';">취소</button>
+    </div>
+    <p id="changePasswordStatus"></p>
+  </div>
+</div>
+
+<!-- 사이드바 -->
+<div class="sidebar hidden" id="sidebar">
+  <div class="mode-buttons">
+    <button id="btnManager" class="active">담당자</button>
+    <button id="btnOwner">선주사</button>
+  </div>
+  <h3 id="listTitle">담당자 목록</h3>
+  <div class="item-list" id="itemList"></div>
+<div class="bottom-area">
+  <button class="user-manage-btn" id="userManageBtn">사용자 관리</button>
+  <button class="user-manage-btn" id="aiConfigBtn" style="background:#343a40;">AI 설정 관리</button>
+  <button class="user-manage-btn" id="apiConfigBtn" style="background:#28a745;">API 설정 관리</button>
+</div>
+</div>
+
+<!-- index.html에서 표시 모드 버튼을 상단으로 이동 -->
+
+<!-- 메인 컨테이너 -->
+<div class="container hidden" id="mainContainer">
+  <!-- 수정 후 HTML 구조 -->
+<div class="header">
+  <div class="header-left">
+    <h1>AS 현황 관리</h1>
+    <!-- 언어 선택 버튼 -->
+    <div class="language-selector">
+      <button data-lang="ko" class="lang-btn active">한국어</button>
+      <button data-lang="en" class="lang-btn">English</button>
+      <button data-lang="zh" class="lang-btn">中文</button>
+      <button data-lang="ja" class="lang-btn">日本語</button>
+    </div>
+  </div>
+  <div class="header-right">
+    <!-- 기본/확장 뷰 전환 버튼을 헤더로 이동 -->
+    <div class="view-toggle header-view-toggle">
+      <span class="view-label">표시:</span>
+      <button id="basicViewBtn" class="view-btn active">기본</button>
+      <button id="extendedViewBtn" class="view-btn">확장</button>
+    </div>
+    <div id="userInfo">사용자: <span id="currentUserName">-</span></div>
+    <!-- 일정 확인 버튼이 여기에 동적으로 추가됨 -->
+    <button id="logoutBtn">로그아웃</button>
+    <div id="connectionStatus">연결 상태: 확인 중...</div>
+  </div>
+</div>
+
+<!-- 동작여부 집계 + 경과일 상태 카드 -->
+<div class="status-summary">
+  <div class="status-card">
+    <h3>정상</h3>
+    <div class="count" id="count정상">0</div>
+  </div>
+  <div class="status-card">
+    <h3>부분동작</h3>
+    <div class="count" id="count부분동작">0</div>
+  </div>
+  <div class="status-card">
+    <h3>동작불가</h3>
+    <div class="count" id="count동작불가">0</div>
+  </div>
+  <!-- 경과일 상태 카드 -->
+  <div class="status-card elapsed-card" style="cursor: pointer;">
+    <h3>30일경과</h3>
+    <div class="count" id="count30Days">0</div>
+  </div>
+  <div class="status-card elapsed-card" style="cursor: pointer;">
+    <h3>60일경과</h3>
+    <div class="count" id="count60Days">0</div>
+  </div>
+  <div class="status-card elapsed-card" style="cursor: pointer;">
+    <h3>90일경과</h3>
+    <div class="count" id="count90Days">0</div>
+  </div>
+</div>
+
+  <!-- 필터 영역 - 호선 대표메일 필터 추가 + Ship Type, Shipyard 필터 추가 -->
+  <div class="filters">
+    <div class="filter-group">
+      <label>IMO NO.</label>
+      <input type="text" id="filterIMO" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>HULL NO.</label>
+      <input type="text" id="filterHull" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>SHIPNAME</label>
+      <input type="text" id="filterName" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>SHIPOWNER</label>
+      <input type="text" id="filterOwner" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>주요선사</label>
+      <input type="text" id="filterMajor" oninput="applyFilters()">
+    </div>
+    <!-- 호선 대표메일 필터 추가 -->
+    <div class="filter-group">
+      <label>호선 대표메일</label>
+      <input type="text" id="filterRepMail" oninput="applyFilters()">
+    </div>
+    <!-- Ship Type 필터 추가 -->
+    <div class="filter-group">
+      <label>SHIP TYPE</label>
+      <input type="text" id="filterShipType" oninput="applyFilters()">
+    </div>
+    <!-- Shipyard 필터 추가 -->
+    <div class="filter-group">
+      <label>SHIPYARD</label>
+      <input type="text" id="filterShipyard" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>그룹</label>
+      <select id="filterGroup" onchange="applyFilters()">
+        <option value="">전체</option>
+        <option value="1">1</option><option value="2">2</option>
+        <option value="3">3</option><option value="4">4</option>
+        <option value="5">5</option><option value="6">6</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>AS 구분</label>
+      <select id="filterAsType" onchange="applyFilters()">
+        <option value="">전체</option>
+        <option value="무상">무상</option>
+        <option value="유상">유상</option>
+        <option value="위탁">위탁</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>현 담당</label>
+      <input type="text" id="filterManager" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>동작여부</label>
+      <select id="filterActive" onchange="applyFilters()">
+        <option value="">전체</option>
+        <option value="정상">정상</option>
+        <option value="부분동작">부분동작</option>
+        <option value="동작불가">동작불가</option>
+      </select>
+    </div>
+    <!-- "전체조회" 버튼 -->
+    <div class="filter-group">
+      <label style="visibility:hidden;">&nbsp;</label>
+      <button id="loadBtn" style="padding:6px 10px;">전체조회</button>
+    </div>
+  </div>
+
+<div class="table-container" id="tableContainer">
+  <div class="table-wrapper" id="tableWrapper">
+    <table id="asTable">
+      <thead>
+        <tr>
+          <th style="width:30px;"><input type="checkbox" id="selectAll"></th>
+          <th data-field="공번">공번<div class="col-resizer"></div></th>
+          <th data-field="공사">공사<div class="col-resizer"></div></th>
+          <th data-field="imo">IMO NO.<div class="col-resizer"></div></th>
+          <!-- 추가된 API 관련 필드 -->
+          <th data-field="api_name">NAME<div class="col-resizer"></div></th>
+          <th data-field="api_owner">OWNER<div class="col-resizer"></div></th>
+          <th data-field="api_manager">MANAGER<div class="col-resizer"></div></th>
+          <th>반영<div class="col-resizer"></div></th>
+          <!-- 기존 필드 -->
+          <th data-field="hull">HULL NO.<div class="col-resizer"></div></th>
+          <th data-field="shipName">SHIPNAME<div class="col-resizer"></div></th>
+          <th data-field="repMail">호선 대표메일<div class="col-resizer"></div></th>
+          <th data-field="shipType">SHIP TYPE<div class="col-resizer"></div></th>
+          <th data-field="scale">SCALE<div class="col-resizer"></div></th>
+          <th data-field="구분">구분<div class="col-resizer"></div></th>
+          <th data-field="shipowner">SHIPOWNER<div class="col-resizer"></div></th>
+          <th data-field="major">주요선사<div class="col-resizer"></div></th>
+          <th data-field="group">그룹<div class="col-resizer"></div></th>
+          <th data-field="shipyard">SHIPYARD<div class="col-resizer"></div></th>
+          <th data-field="contract">계약<div class="col-resizer"></div></th>
+          <th data-field="asType">AS 구분<div class="col-resizer"></div></th>
+          <th data-field="delivery">인도일<div class="col-resizer"></div></th>
+          <th data-field="warranty">보증종료일<div class="col-resizer"></div></th>
+          <th data-field="prevManager">전 담당<div class="col-resizer"></div></th>
+          <th data-field="manager">현 담당<div class="col-resizer"></div></th>
+          <th data-field="현황">현황<div class="col-resizer"></div></th>
+          <th data-field="현황번역">현황 번역<div class="col-resizer"></div></th>
+          <!-- AI 요약(단일행) -->
+          <th>AI 요약</th>
+          <th data-field="동작여부">동작여부<div class="col-resizer"></div></th>
+          <!-- 추가 열들 -->
+          <th data-field="조치계획">조치계획<div class="col-resizer"></div></th>
+          <th data-field="접수내용">접수내용<div class="col-resizer"></div></th>
+          <th data-field="조치결과">조치결과<div class="col-resizer"></div></th>
+          <th data-field="historyCount">AS접수건수<div class="col-resizer"></div></th>
+          <!-- 히스토리 AI 요약 열 -->
+          <th>히스토리</th>
+          <th data-field="AS접수일자">AS접수일자<div class="col-resizer"></div></th>
+          <th data-field="기술적종료일">기술적종료일<div class="col-resizer"></div></th>
+          <th data-field="경과일">경과일<div class="col-resizer"></div></th>
+          <th data-field="정상지연">정상지연<div class="col-resizer"></div></th>
+          <th data-field="지연 사유">지연 사유<div class="col-resizer"></div></th>
+          <!-- 수정일 추가 -->
+          <th data-field="수정일">수정일<div class="col-resizer"></div></th>
+        </tr>
+      </thead>
+      <tbody id="asBody"></tbody>
+    </table>
+  </div>
+</div>
+
+  <!-- 하단 버튼 -->
+  <div class="bottom-controls">
+    <button id="addRowBtn">행 추가</button>
+    <button id="deleteRowBtn">선택 행 삭제</button>
+    <button id="saveBtn">저장</button>
+    <button id="downloadExcelBtn">엑셀 다운로드</button>
+    <!-- 엑셀 업로드 -->
+    <input type="file" id="uploadExcelInput" style="display:none;" accept=".xlsx,.xls">
+    <button id="uploadExcelBtn">엑셀 업로드</button>
+    <!-- (신규) AS 현황 업로드 -->
+    <input type="file" id="uploadAsStatusInput" style="display:none;" accept=".xlsx,.xls">
+    <button id="uploadAsStatusBtn">AS 현황 업로드</button>
+    <button id="historyBtn">히스토리 조회</button>
+    <button id="clearHistoryBtn">히스토리 전체 삭제</button>
+    <button id="translateBtn" style="background:#5d6d7e;">현황 번역</button>
+    <!-- (추가) 선사별 AI 요약 버튼 -->
+    <button id="ownerAISummaryBtn" style="background:#6c757d;">선사별 AI 요약</button>
+    <!-- (추가) API 전체 반영 버튼 -->
+    <button id="apiRefreshAllBtn" style="background:#28a745;">API 전체 반영</button>
+    <!-- (추가) 담당자별 현황 버튼 -->
+    <button id="managerStatusBtn" style="background:#ff6b6b;">담당자별 현황</button>
+  </div>
+
+  <!-- 히스토리 모달 -->
+  <div id="historyModal">
+    <div class="modal-content">
+      <span class="close" onclick="closeHistoryModal()">&times;</span>
+      <h2>변경 이력</h2>
+      <ul class="history-list" id="historyList"></ul>
+    </div>
+  </div>
+
+  <!-- 사용자 관리 모달 -->
+  <div id="userModal">
+    <div class="modal-content">
+      <span class="close" onclick="closeUserModal()">&times;</span>
+      <h2>사용자 관리</h2>
+      <!-- 사용자 목록 표시 영역 -->
+      <div id="userList" style="border:1px solid #ccc; padding:6px; margin-bottom:10px; max-height:150px; overflow:auto;"></div>
+      
+      <div class="btn-row">
+        <button id="deleteSelectedUsersBtn">선택 사용자 삭제</button>
+      </div>
+      <hr style="margin:10px 0;">
+      <h3>새 사용자 추가</h3>
+      <div class="form-group">
+        <label>사용자명</label>
+        <input type="text" id="newUserName">
+      </div>
+      <div class="form-group">
+        <label>비밀번호</label>
+        <input type="password" id="newUserPw">
+      </div>
+      <div class="btn-row">
+        <button id="addUserConfirmBtn">추가</button>
+        <button onclick="closeUserModal()">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 담당자별 현황 모달 -->
+  <div id="managerStatusModal">
+    <div class="modal-content">
+      <span class="close" onclick="closeManagerStatusModal()">&times;</span>
+      <!-- 전체화면 버튼 추가 -->
+      <button style="position:absolute; right:45px; top:10px; font-size:0.85em; background:#666; color:#fff; border:none; border-radius:4px; padding:4px 8px; cursor:pointer;"
+              onclick="toggleManagerStatusFullscreen()">전체화면</button>
+      <h2>담당자별 일정 관리 현황</h2>
+      <div style="margin-bottom: 10px;">
+        <label>정렬: </label>
+        <select id="managerStatusSort" onchange="sortManagerStatus()">
+          <option value="name">이름순</option>
+          <option value="overdue">경과일순</option>
+          <option value="access">최근 접속순</option>
+        </select>
+      </div>
+      <div id="managerStatusList" style="max-height: 600px; overflow-y: auto;">
+        <!-- 담당자별 현황이 여기에 표시됩니다 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- API 설정 관리 모달 -->
+  <div id="apiConfigModal">
+    <div class="modal-content">
+      <span class="close" onclick="closeApiConfigModal()">&times;</span>
+      <h2>API 설정 관리</h2>
+      <div class="form-group">
+        <label>API Key</label>
+        <input type="text" id="vesselfinder_apikey" placeholder="예: WS-369D3791-7523E2">
+      </div>
+      <div class="form-group">
+        <label>API Base URL</label>
+        <input type="text" id="vesselfinder_baseurl" placeholder="예: https://api.vesselfinder.com/masterdata" value="https://api.vesselfinder.com/masterdata">
+      </div>
+      <div class="btn-row">
+        <button id="saveApiConfigBtn">저장</button>
+        <button onclick="closeApiConfigModal()">취소</button>
+      </div>
+      <hr style="margin:15px 0;">
+      <div class="form-group">
+        <h3>API 사용량 확인</h3>
+        <p id="apiCreditStatus">로딩 중...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 엑셀 업로드 모달 -->
+  <div id="excelModal">
+    <div class="modal-content">
+      <h3>엑셀 업로드 방식 선택</h3>
+      <div class="btn-row">
+        <button id="excelReplaceBtn">기존 삭제 후 업로드</button>
+        <button id="excelAppendBtn">추가만</button>
+        <button id="excelCancelBtn">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 내용 보기 모달 -->
+  <div id="contentModal">
+    <div class="modal-content">
+      <!-- 닫기 버튼 -->
+      <span class="close" onclick="closeContentModal()">&times;</span>
+      <!-- 전체화면 버튼 -->
+      <button style="position:absolute; right:45px; top:10px; font-size:0.85em; background:#666; color:#fff; border:none; border-radius:4px; padding:4px 8px; cursor:pointer;"
+              onclick="toggleContentModalFullscreen()">전체화면</button>
+      <h2>전체 내용</h2>
+      <div id="contentText"></div>
+    </div>
+  </div>
+
+  <!-- (신규) 선사별 AI 요약 모달 -->
+  <div id="ownerAIModal">
+    <div class="modal-content">
+      <!-- 닫기 버튼 -->
+      <span class="close" onclick="document.getElementById('ownerAIModal').style.display='none';">&times;</span>
+      <!-- 전체화면 버튼 -->
+      <button style="position:absolute; right:45px; top:10px; font-size:0.85em; background:#666; color:#fff; border:none; border-radius:4px; padding:4px 8px; cursor:pointer;"
+              onclick="toggleOwnerAIModalFullscreen()">전체화면</button>
+      <h2>선사별 접수내용/조치결과 요약</h2>
+      <p style="font-size:0.85em; color:#666;">(현재 필터의 선사(SHIPOWNER) 기준으로 AI 요약)</p>
+      <div id="ownerAISummaryText">로딩 전...</div>
+    </div>
+  </div>
+
+  <!-- (신규) AI 설정 관리 모달 -->
+  <div id="aiConfigModal">
+    <div class="modal-content">
+      <span class="close" onclick="document.getElementById('aiConfigModal').style.display='none';">&times;</span>
+      <h2>AI 설정 관리</h2>
+      <div class="form-group">
+        <label>API Key</label>
+        <input type="text" id="aiApiKey" placeholder="예: sk-xxxxxx...">
+      </div>
+      <div class="form-group">
+        <label>모델 (예: gpt-4o, gpt-4o-mini, gemini-2.0-pro-exp-02-05 등)</label>
+        <input type="text" id="aiModel" placeholder="예: gemini-2.0-pro-exp-02-05">
+      </div>
+      <hr>
+      <h3>1) 단일 행 요약 지침 프롬프트</h3>
+      <div class="form-group">
+        <label>프롬프트 내용</label>
+        <textarea id="aiPromptRow" rows="3" placeholder="단일 행 AI 요약 시 사용할 지침"></textarea>
+      </div>
+      <h3>2) 히스토리 요약 지침 프롬프트</h3>
+      <div class="form-group">
+        <label>프롬프트 내용</label>
+        <textarea id="aiPromptHistory" rows="3" placeholder="히스토리 AI 요약 시 사용할 지침"></textarea>
+      </div>
+      <h3>3) 선사별 요약 지침 프롬프트</h3>
+      <div class="form-group">
+        <label>프롬프트 내용</label>
+        <textarea id="aiPromptOwner" rows="3" placeholder="선사별 AI 요약 시 사용할 지침"></textarea>
+      </div>
+      <div class="btn-row">
+        <button id="saveAiConfigBtn">저장</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- (신규) AI 실시간 진행 상황 표시 모달 -->
+  <div id="aiProgressModal">
+    <div class="modal-content">
+      <span class="close" onclick="document.getElementById('aiProgressModal').style.display='none';">&times;</span>
+      <h2>AI 요약 진행 상황</h2>
+      <div id="aiProgressText"></div>
+    </div>
+  </div>
+
+  <!-- API 진행 상황 표시 모달 -->
+  <div id="apiProgressModal">
+    <div class="modal-content">
+      <span class="close" onclick="document.getElementById('apiProgressModal').style.display='none';">&times;</span>
+      <h2>API 데이터 가져오기</h2>
+      <div id="apiProgressText"></div>
+    </div>
+  </div>
+
+  <!-- 메인 스크립트 -->
+ <script src="script.js?v=1.0.3"></script>
+</body>
+</html>
+
