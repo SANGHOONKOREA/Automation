@@ -90,6 +90,33 @@ function normalizeEmail(email) {
   return (email || '').trim().toLowerCase();
 }
 
+function rebuildUserLookupCaches() {
+  if (!mainUsersData || typeof mainUsersData !== 'object') {
+    mainUsersData = {};
+    return;
+  }
+
+  const sanitizedEntries = {};
+
+  for (const [key, value] of Object.entries(mainUsersData)) {
+    const normalized = normalizeEmail(value?.email);
+    if (!normalized) {
+      continue;
+    }
+
+    const safeKey = sanitizeKey(normalized);
+    sanitizedEntries[safeKey] = {
+      ...(value || {}),
+      email: normalized,
+      uid: value?.uid || key
+    };
+  }
+
+  for (const [safeKey, value] of Object.entries(sanitizedEntries)) {
+    mainUsersData[safeKey] = value;
+  }
+}
+
 function convertSnapshotToArray(obj = {}) {
   return Object.entries(obj).map(([key, value]) => ({ key, ...value }));
 }
@@ -133,155 +160,87 @@ function extractUidFromRecord(record = {}, fallbackKey = '') {
   return null;
 }
 
-async function ensureLocalUserCaches(forceRefresh = false) {
-  const tasks = [];
-
-  if (forceRefresh || !mainUsersData) {
-    tasks.push(
-      db.ref(userPath)
-        .once('value')
-        .then(snapshot => {
-          mainUsersData = snapshot.val() || {};
-        })
-        .catch(error => {
-          console.error('메인 사용자 데이터 로드 오류:', error);
-          if (!mainUsersData) {
-            mainUsersData = {};
-          }
-        })
-    );
-  }
-
-  if (forceRefresh || !userRecords) {
-    tasks.push(
-      db.ref(legacyUsersPath)
-        .once('value')
-        .then(snapshot => {
-          userRecords = snapshot.val() || {};
-        })
-        .catch(error => {
-          console.error('레거시 사용자 데이터 로드 오류:', error);
-          if (!userRecords) {
-            userRecords = {};
-          }
-        })
-    );
-  }
-
-  if (forceRefresh || !userMetaCache) {
-    tasks.push(
-      db.ref(userMetaPath)
-        .once('value')
-        .then(snapshot => {
-          userMetaCache = snapshot.val() || {};
-        })
-        .catch(error => {
-          console.error('사용자 메타 데이터 로드 오류:', error);
-          if (!userMetaCache) {
-            userMetaCache = {};
-          }
-        })
-    );
-  }
-
-  if (tasks.length) {
-    await Promise.all(tasks);
-  }
-}
-
-function lookupUidFromCaches(normalizedEmail) {
-  if (!normalizedEmail) {
-    return null;
-  }
-
-  const safeKey = sanitizeKey(normalizedEmail);
-
-  if (mainUsersData) {
-    const directEntry = mainUsersData[safeKey];
-    if (directEntry) {
-      const uid = extractUidFromRecord(directEntry);
-      if (uid) {
-        return uid;
-      }
-      const entryEmail = extractEmailFromRecord(directEntry);
-      if (entryEmail === normalizedEmail) {
-        const fallbackUid = extractUidFromRecord(directEntry, safeKey);
-        if (fallbackUid) {
-          return fallbackUid;
-        }
-      }
-    }
-
-    for (const [key, value] of Object.entries(mainUsersData)) {
-      const entryEmail = extractEmailFromRecord(value);
-      if (entryEmail === normalizedEmail) {
-        const uid = extractUidFromRecord(value, key);
-        if (uid) {
-          return uid;
-        }
-      }
-    }
-  }
-
-  if (userRecords) {
-    for (const [key, value] of Object.entries(userRecords)) {
-      const entryEmail = extractEmailFromRecord(value);
-      if (entryEmail === normalizedEmail) {
-        const uid = extractUidFromRecord(value, key);
-        if (uid) {
-          return uid;
-        }
-      }
-    }
-  }
-
-  if (userMetaCache) {
-    for (const [key, value] of Object.entries(userMetaCache)) {
-      const entryEmail = extractEmailFromRecord(value);
-      if (entryEmail === normalizedEmail) {
-        const uid = extractUidFromRecord(value, key);
-        if (uid) {
-          return uid;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
 async function resolveUidByEmail(email) {
   const normalized = normalizeEmail(email);
-  if (!normalized) {
-    return null;
-  }
+  if (!normalized) return null;
 
-  await ensureLocalUserCaches();
-
-  let uid = lookupUidFromCaches(normalized);
-  if (uid) {
-    return uid;
-  }
-
-  await ensureLocalUserCaches(true);
-  uid = lookupUidFromCaches(normalized);
-  if (uid) {
-    return uid;
-  }
-
-  const queriedUid = await findUidByEmail(email);
-  if (queriedUid) {
-    if (!userMetaCache) {
-      userMetaCache = {};
+  const findUid = records => {
+    if (!records || typeof records !== 'object') return null;
+    for (const [uid, data] of Object.entries(records)) {
+      if (normalizeEmail(data?.email) === normalized) {
+        return data?.uid || uid;
+      }
     }
-    userMetaCache[queriedUid] = {
-      ...(userMetaCache?.[queriedUid] || {}),
-      email: normalized,
-      uid: queriedUid
-    };
+    return null;
+  };
+
+  const refreshMainUsers = async () => {
+    try {
+      const snapshot = await db.ref(userPath).once('value');
+      mainUsersData = snapshot.val() || {};
+      rebuildUserLookupCaches();
+    } catch (error) {
+      console.error('메인 사용자 목록 로드 오류:', error);
+      mainUsersData = {};
+      rebuildUserLookupCaches();
+    }
+  };
+
+  const refreshLegacyUsers = async () => {
+    try {
+      const legacySnapshot = await db.ref(legacyUsersPath).once('value');
+      userRecords = legacySnapshot.val() || {};
+    } catch (error) {
+      console.error('레거시 사용자 목록 로드 오류:', error);
+      userRecords = {};
+    }
+  };
+
+  const refreshUserMeta = async () => {
+    try {
+      const metaSnapshot = await db.ref(userMetaPath).once('value');
+      userMetaCache = metaSnapshot.val() || {};
+      rebuildUserLookupCaches();
+    } catch (error) {
+      console.error('사용자 메타데이터 로드 오류:', error);
+      userMetaCache = {};
+      rebuildUserLookupCaches();
+    }
+  };
+
+  if (!mainUsersData || !Object.keys(mainUsersData).length) {
+    await refreshMainUsers();
   }
 
-  return queriedUid;
+  let resolved = findUid(mainUsersData);
+  if (!resolved) {
+    await refreshMainUsers();
+    resolved = findUid(mainUsersData);
+  }
+  if (resolved) return resolved;
+
+  if (!userRecords || !Object.keys(userRecords).length) {
+    await refreshLegacyUsers();
+  }
+
+  resolved = findUid(userRecords);
+  if (!resolved) {
+    await refreshLegacyUsers();
+    resolved = findUid(userRecords);
+  }
+  if (resolved) return resolved;
+
+  if (!userMetaCache || !Object.keys(userMetaCache).length) {
+    await refreshUserMeta();
+  }
+
+  resolved = findUid(userMetaCache);
+  if (!resolved) {
+    await refreshUserMeta();
+    resolved = findUid(userMetaCache);
+  }
+
+  return resolved;
 }
 
 async function verifyEmailRegistration(email, existingUid = null) {
@@ -290,7 +249,8 @@ async function verifyEmailRegistration(email, existingUid = null) {
     return { registered: false, uid: null };
   }
 
-  let resolvedUid = existingUid;
+  let resolvedUid = existingUid || null;
+
   if (!resolvedUid) {
     resolvedUid = await resolveUidByEmail(normalized);
   }
@@ -305,32 +265,40 @@ async function verifyEmailRegistration(email, existingUid = null) {
       return { registered: true, uid: null };
     }
   } catch (error) {
-    console.error('Firebase Auth 이메일 확인 오류:', error);
+    if (error?.code === 'auth/invalid-email') {
+      throw error;
+    }
+    console.warn('이메일 인증 방법 조회 실패:', error);
   }
 
-  if (typeof fetch === 'function') {
-    try {
-      const response = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            identifier: normalized,
-            continueUri:
-              (typeof window !== 'undefined' && window.location?.origin) ||
-              'https://snsys.net'
-          })
-        }
-      );
-
-      const data = await response.json();
-      if (data?.registered) {
-        return { registered: true, uid: null };
+  try {
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          identifier: normalized,
+          continueUri:
+            (typeof window !== 'undefined' && window?.location?.origin) ||
+            'https://snsys.net'
+        })
       }
-    } catch (error) {
-      console.error('Firebase REST 이메일 확인 오류:', error);
+    );
+
+    const data = await response.json();
+
+    if (data?.registered) {
+      return { registered: true, uid: null };
     }
+
+    if (data?.error) {
+      console.warn('Firebase createAuthUri 오류:', data.error);
+    }
+  } catch (error) {
+    console.error('Firebase 등록 이메일 확인 오류:', error);
   }
 
   return { registered: false, uid: null };
