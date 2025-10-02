@@ -271,7 +271,29 @@ async function verifyEmailRegistration(email, existingUid = null) {
     console.warn('이메일 인증 방법 조회 실패:', error);
   }
 
+  const resolveContinueUri = () => {
+    if (typeof window !== 'undefined' && window?.location?.origin) {
+      return window.location.origin;
+    }
+
+    const authDomain = firebaseConfig?.authDomain;
+    if (!authDomain) {
+      return null;
+    }
+
+    return authDomain.startsWith('http') ? authDomain : `https://${authDomain}`;
+  };
+
   try {
+    const payload = {
+      identifier: normalized
+    };
+
+    const continueUri = resolveContinueUri();
+    if (continueUri) {
+      payload.continueUri = continueUri;
+    }
+
     const response = await fetch(
       `https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`,
       {
@@ -279,12 +301,7 @@ async function verifyEmailRegistration(email, existingUid = null) {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          identifier: normalized,
-          continueUri:
-            (typeof window !== 'undefined' && window?.location?.origin) ||
-            'https://snsys.net'
-        })
+        body: JSON.stringify(payload)
       }
     );
 
