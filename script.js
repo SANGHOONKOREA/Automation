@@ -4269,8 +4269,8 @@ function handleAsStatusUpload(e) {
 
 function readAsStatusFile(file) {
   const reader = new FileReader();
-  
-  reader.onload = function(evt) {
+
+  reader.onload = async function(evt) {
     let loadingEl = document.createElement('div');
     loadingEl.style.position = 'fixed';
     loadingEl.style.top = '50%';
@@ -4283,26 +4283,33 @@ function readAsStatusFile(file) {
     loadingEl.style.zIndex = '9999';
     loadingEl.textContent = 'AS 현황 데이터 처리 중...';
     document.body.appendChild(loadingEl);
-    
-    setTimeout(() => {
+
+    const setLoadingMessage = (message) => {
+      if (loadingEl) {
+        loadingEl.textContent = message;
+      }
+    };
+
+    setTimeout(async () => {
       try {
+        setLoadingMessage('엑셀 데이터를 파싱하는 중...');
         const data = new Uint8Array(evt.target.result);
-        const wb = XLSX.read(data, {type: 'array', cellDates: true, dateNF: "yyyy-mm-dd"});
+        const wb = XLSX.read(data, { type: 'array', cellDates: true, dateNF: "yyyy-mm-dd" });
         const sheet = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json(sheet, {defval: ""});
-        
+        const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
         const map = {};
         const projectCount = {};
         const batchAiRecords = {};
         const now = new Date().toISOString().split('T')[0];
-        
+
         json.forEach(row => {
           const asStatus = (row['AS진행상태'] || '').trim();
           if (asStatus === '접수취소') return;
-          
+
           const project = (row['수익프로젝트'] || '').trim();
           if (!project) return;
-          
+
           const asDateRaw = row['AS접수일자'] || '';
           let asDateFormatted = '';
           if (asDateRaw) {
@@ -4311,13 +4318,13 @@ function readAsStatusFile(file) {
               asDateFormatted = dateToYMD(asDateObj.getTime());
             }
           }
-          
+
           const tEndRaw = row['기술적종료일자'] || '';
           let tEndFormatted = '';
           if (tEndRaw) {
             tEndFormatted = parseDateString(tEndRaw);
           }
-          
+
           const aiRecordKey = getProjectHistoryRef(project).push().key;
           batchAiRecords[`${aiHistoryPath}/${project}/${aiRecordKey}`] = {
             project: project,
@@ -4328,29 +4335,29 @@ function readAsStatusFile(file) {
             기술적종료일: tEndFormatted,
             timestamp: new Date().toISOString()
           };
-          
+
           if (!projectCount[project]) {
             projectCount[project] = 1;
           } else {
             projectCount[project]++;
           }
-          
+
           const asDateMS = asDateRaw ? new Date(asDateRaw.replace(/[./]/g, '-') + "T00:00").getTime() : 0;
-          
           if (isNaN(asDateMS)) return;
-          
+
           const plan = row['조치계획'] || '';
           const rec = row['접수내용'] || '';
           const res = row['조치결과'] || '';
           const tEnd = tEndRaw || '';
-          
+
           if (!map[project]) {
-            map[project] = {asDate: asDateMS, plan, rec, res, tEnd};
+            map[project] = { asDate: asDateMS, plan, rec, res, tEnd };
           } else if (asDateMS > map[project].asDate) {
-            map[project] = {asDate: asDateMS, plan, rec, res, tEnd};
+            map[project] = { asDate: asDateMS, plan, rec, res, tEnd };
           }
         });
-        
+
+        setLoadingMessage('유사도 분석을 위한 임베딩을 준비하는 중...');
         await attachEmbeddingsToHistoryBatch(batchAiRecords);
 
         for (const recordPath in batchAiRecords) {
@@ -4361,14 +4368,14 @@ function readAsStatusFile(file) {
         }
 
         const updates = {};
-
         Object.assign(updates, batchAiRecords);
 
         let updateCount = 0;
+        setLoadingMessage('데이터를 정리하고 있습니다...');
         for (let project in map) {
           const item = map[project];
           const row = asData.find(x => x.공번 === project);
-          
+
           if (row) {
             row.조치계획 = item.plan;
             row.접수내용 = item.rec;
@@ -4377,7 +4384,7 @@ function readAsStatusFile(file) {
             row["AS접수일자"] = dateToYMD(item.asDate);
             row["수정일"] = now;
             row["현황번역"] = "";
-            
+
             updates[`${asPath}/${row.uid}/조치계획`] = row.조치계획;
             updates[`${asPath}/${row.uid}/접수내용`] = row.접수내용;
             updates[`${asPath}/${row.uid}/조치결과`] = row.조치결과;
@@ -4385,12 +4392,13 @@ function readAsStatusFile(file) {
             updates[`${asPath}/${row.uid}/AS접수일자`] = row["AS접수일자"];
             updates[`${asPath}/${row.uid}/수정일`] = row["수정일"];
             updates[`${asPath}/${row.uid}/현황번역`] = "";
-            
+
             updateCount++;
           }
         }
-        
+
         try {
+          setLoadingMessage(`Firebase에 데이터를 저장하는 중... (${updateCount}건)`);
           await db.ref().update(updates);
 
           addHistory(`AS 현황 업로드 - 총 ${updateCount}건 접수/조치정보 갱신`);
@@ -4400,23 +4408,26 @@ function readAsStatusFile(file) {
             updateTable();
           }
 
-          document.body.removeChild(loadingEl);
+          setLoadingMessage('AS 현황 업로드가 완료되었습니다.');
           alert(`AS 현황 업로드 완료 (총 ${updateCount}건 업데이트)`);
         } catch (err) {
           console.error("AS 현황 업로드 오류:", err);
-          document.body.removeChild(loadingEl);
           alert("데이터 저장 중 오류가 발생했습니다.");
         }
       } catch (err) {
         console.error("AS 현황 파일 처리 오류:", err);
-        document.body.removeChild(loadingEl);
         alert("AS 현황 파일 처리 중 오류가 발생했습니다.");
+      } finally {
+        if (loadingEl && document.body.contains(loadingEl)) {
+          document.body.removeChild(loadingEl);
+        }
       }
     }, 100);
-  };
-  
-  reader.readAsArrayBuffer(file);
-}
+    };
+
+
+    reader.readAsArrayBuffer(file);
+  }
 
 function parseDateString(str) {
   if (!str) return '';
