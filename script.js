@@ -4019,7 +4019,21 @@ function downloadExcel() {
         return row;
       });
 
-      const ws = XLSX.utils.json_to_sheet(arr);
+      const templateHeaders = [
+        '공번', '시스템', 'IMO', 'HULL', 'PROJECT', 'SHIPNAME', 'SHIPOWNER',
+        'API_NAME', 'API_OWNER', 'API_MANAGER', '호선 대표메일', 'SHIP TYPE', 'SHIPYARD', 'AS 구분',
+        '인도일', '보증종료일', '전 담당', '현 담당', '현황', '현황번역', '동작여부', '조치계획', '접수내용',
+        '조치결과', 'AS접수건수', 'H/W TYPE', 'SOFTWARE', 'CPU ROM VER', 'RAU ROM VER'
+      ];
+      const trailingHeaders = ['AS접수일자', '기술적종료일', '정상지연', '지연 사유', '수정일'];
+      const headerRow = [...templateHeaders, ...historyYears.map(String), ...trailingHeaders];
+
+      const sheetData = [headerRow];
+      arr.forEach(rowObj => {
+        sheetData.push(headerRow.map(key => (rowObj[key] ?? '')));
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "AS_Data");
       
