@@ -1402,6 +1402,7 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
 #adminPasswordModal,
 #contentModal,
 #ownerAIModal,
+#similarHistoryModal,
 #aiProgressModal,
 #apiProgressModal,
 #excelModal,
@@ -1928,10 +1929,16 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
 }
 
 #aiConfigModal .form-group label {
-  display: block; 
-  font-weight: 600; 
+  display: block;
+  font-weight: 600;
   margin-bottom: 8px;
   color: #333;
+}
+
+#aiConfigModal .form-hint {
+  font-size: 0.8em;
+  color: #666;
+  margin-top: 4px;
 }
 
 #aiConfigModal input[type="text"], 
@@ -2223,6 +2230,102 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
   padding: 20px;
   background: #fafbfc;
   border: 2px solid #e9ecef;
+  border-radius: 8px;
+}
+
+/* =================================
+   유사 AS 검색 결과 모달
+   ================================= */
+#similarHistoryModal .modal-content {
+  width: 900px;
+  max-width: 95%;
+  padding: 28px;
+  max-height: 85vh;
+}
+
+#similarHistoryModal h2 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.similar-history-summary {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #444;
+}
+
+.similar-history-query {
+  margin-bottom: 16px;
+  font-size: 0.9em;
+  color: #666;
+}
+
+.similar-history-list {
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.similar-history-card {
+  border: 1px solid #e1e5e9;
+  border-radius: 8px;
+  padding: 14px 18px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.similar-history-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.similar-history-project {
+  font-size: 1.05em;
+  font-weight: 700;
+  color: var(--secondary-color);
+}
+
+.similar-history-score {
+  font-weight: 700;
+  color: #17a2b8;
+}
+
+.similar-history-card-body {
+  display: grid;
+  gap: 8px;
+}
+
+.similar-history-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.similar-history-label {
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #777;
+}
+
+.similar-history-value {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: #2d3e50;
+}
+
+.similar-history-empty {
+  text-align: center;
+  padding: 40px 0;
+  color: #666;
+  font-size: 0.95em;
+  border: 1px dashed #d1d5db;
   border-radius: 8px;
 }
 
