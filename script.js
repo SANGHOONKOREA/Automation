@@ -56,6 +56,7 @@ let managerScheduleStatus = {};
 let isExtendedView = false;
 let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
+let historyCountsByProject = new Map();
 
 // 필터 디바운스 타이머
 let filterDebounceTimer = null;
@@ -186,6 +187,7 @@ let g_apiConfig = {
 const EMBEDDING_FIELD_LIMIT_SHORT = 64;
 const EMBEDDING_FIELD_LIMIT_LONG = 600;
 const EMBEDDING_CACHE_LIMIT = 200;
+const EMBEDDING_BATCH_CONCURRENCY = 10;
 const embeddingRequestCache = new Map();
 
 // 연도별 AS 접수 건수 열 생성
@@ -2258,6 +2260,63 @@ function testConnection() {
     });
 }
 
+function createEmptyHistoryCounts() {
+  return { perYear: {}, total: 0 };
+}
+
+function normalizeProjectKey(value = '') {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function assignHistoryCountsToRows(countMap = new Map(), rows = asData) {
+  if (!Array.isArray(rows)) return;
+
+  rows.forEach(row => {
+    if (!row || typeof row !== 'object') return;
+
+    const candidates = [
+      row.공번,
+      row.project,
+      row.Project,
+      row.projectCode
+    ];
+
+    let assigned = false;
+    for (const candidate of candidates) {
+      const normalized = normalizeProjectKey(candidate);
+      if (!normalized) continue;
+
+      const possibleKeys = [
+        normalized,
+        normalized.toLowerCase(),
+        sanitizeKey(normalized)
+      ];
+
+      for (const key of possibleKeys) {
+        if (!key) continue;
+        const counts = countMap.get(key);
+        if (!counts) continue;
+
+        row.historyCounts = {
+          total: counts.total || 0,
+          perYear: { ...counts.perYear }
+        };
+        assigned = true;
+        break;
+      }
+
+      if (assigned) {
+        break;
+      }
+    }
+
+    if (!assigned) {
+      row.historyCounts = createEmptyHistoryCounts();
+    }
+  });
+}
+
 async function loadData() {
   const snap = await db.ref(asPath).once('value');
   const val = snap.val() || {};
@@ -2300,6 +2359,7 @@ async function loadData() {
       r.동작여부 = "정상";
     }
 
+    r.historyCounts = createEmptyHistoryCounts();
     asData.push(r);
   });
 
@@ -2315,26 +2375,56 @@ async function loadData() {
 
 // 히스토리 건수 로드
 async function loadHistoryCounts() {
-  const tasks = asData.map(row =>
-    getProjectHistoryRef(row.공번).once('value').then(snapshot => {
-      const data = snapshot.val() || {};
+  try {
+    const snapshot = await db.ref(aiHistoryPath).once('value');
+    const data = snapshot.val() || {};
+    const countMap = new Map();
+
+    Object.entries(data).forEach(([projectKey, records]) => {
+      if (!records || typeof records !== 'object') return;
+
       const perYear = {};
       let total = 0;
-      Object.values(data).forEach(rec => {
-        if (!rec.AS접수일자) return;
-        const year = parseInt(rec.AS접수일자.substring(0, 4), 10);
-        if (year >= 2020) {
-          perYear[year] = (perYear[year] || 0) + 1;
-          total++;
+
+      Object.values(records).forEach(rec => {
+        if (!rec || typeof rec !== 'object') return;
+
+        const dateStr = normalizeProjectKey(rec.AS접수일자 || '');
+        if (!dateStr) return;
+
+        const year = parseInt(dateStr.substring(0, 4), 10);
+        if (!Number.isFinite(year) || year < historyStartYear) return;
+
+        perYear[year] = (perYear[year] || 0) + 1;
+        total++;
+      });
+
+      const normalizedKey = normalizeProjectKey(projectKey);
+      if (!normalizedKey) return;
+
+      const counts = { perYear, total };
+      const keyVariants = new Set([
+        normalizedKey,
+        normalizedKey.toLowerCase(),
+        sanitizeKey(normalizedKey)
+      ]);
+
+      keyVariants.forEach(key => {
+        if (key) {
+          countMap.set(key, counts);
         }
       });
-      row.historyCounts = { perYear, total };
-    }).catch(err => {
-      console.error('히스토리 건수 로드 오류:', err);
-      row.historyCounts = { perYear: {}, total: 0 };
-    })
-  );
-  await Promise.all(tasks);
+    });
+
+    historyCountsByProject = countMap;
+    assignHistoryCountsToRows(historyCountsByProject);
+    return historyCountsByProject;
+  } catch (error) {
+    console.error('히스토리 건수 로드 오류:', error);
+    historyCountsByProject = new Map();
+    assignHistoryCountsToRows(historyCountsByProject);
+    return historyCountsByProject;
+  }
 }
 
 // onCellChange 함수
@@ -4417,6 +4507,7 @@ function readAsStatusFile(file) {
 
           addHistory(`AS 현황 업로드 - 총 ${updateCount}건 접수/조치정보 갱신`);
           invalidateHistoryEmbeddingIndex();
+          await loadHistoryCounts();
 
           if (filteredData.length > 0) {
             updateTable();
@@ -5173,6 +5264,30 @@ async function ensureHistoryRecordEmbedding(entry, embedModel) {
   return vector;
 }
 
+async function runWithConcurrency(items = [], limit = 1, worker = async () => {}) {
+  if (!Array.isArray(items) || !items.length || typeof worker !== 'function') return;
+
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  let index = 0;
+
+  async function next() {
+    while (true) {
+      let currentIndex;
+      if (index >= items.length) return;
+      currentIndex = index++;
+
+      try {
+        await worker(items[currentIndex], currentIndex);
+      } catch (error) {
+        console.error('병렬 작업 처리 중 오류:', error);
+      }
+    }
+  }
+
+  const runners = Array.from({ length: concurrency }, () => next());
+  await Promise.all(runners);
+}
+
 async function attachEmbeddingsToHistoryBatch(batchRecords = {}) {
   const entries = Object.entries(batchRecords);
   if (!entries.length) return;
@@ -5189,35 +5304,67 @@ async function attachEmbeddingsToHistoryBatch(batchRecords = {}) {
     return;
   }
 
-  const cache = new Map();
-  for (const [path, record] of entries) {
-    if (!record) continue;
-    const text = buildHistoryEmbeddingText(record);
-    if (!text.trim()) continue;
+  const textToRecords = new Map();
 
-    let vector = cache.get(text);
-    if (!vector) {
-      vector = getEmbeddingCacheEntry(embedModel, text);
-    }
+  entries.forEach(([, record]) => {
+    if (!record || typeof record !== 'object') return;
 
-    if (!vector) {
-      try {
-        vector = await getAiEmbedding(text, embedModel);
-      } catch (error) {
-        console.error('배치 임베딩 생성 오류:', error);
-        vector = [];
+    const existingString = typeof record.embedding === 'string'
+      ? record.embedding
+      : (typeof record.embeddingString === 'string' ? record.embeddingString : '');
+
+    if (existingString) {
+      record.embedding = existingString;
+      record.embeddingString = existingString;
+      if (!record.embeddingModel) {
+        record.embeddingModel = embedModel;
       }
+      if (!record.embeddingUpdatedAt) {
+        record.embeddingUpdatedAt = new Date().toISOString();
+      }
+      return;
     }
 
-    if (!vector || !vector.length) continue;
+    const text = buildHistoryEmbeddingText(record);
+    if (!text.trim()) return;
 
-    cache.set(text, vector.slice());
-    setEmbeddingCacheEntry(embedModel, text, vector);
+    if (!textToRecords.has(text)) {
+      textToRecords.set(text, []);
+    }
+    textToRecords.get(text).push(record);
+  });
 
-    record.embedding = embeddingToString(vector);
-    record.embeddingModel = embedModel;
-    record.embeddingUpdatedAt = new Date().toISOString();
-  }
+  const uniqueTexts = Array.from(textToRecords.keys());
+  if (!uniqueTexts.length) return;
+
+  const vectorsByText = new Map();
+
+  await runWithConcurrency(uniqueTexts, EMBEDDING_BATCH_CONCURRENCY, async text => {
+    let vector = getEmbeddingCacheEntry(embedModel, text);
+    if (!vector) {
+      vector = await getAiEmbedding(text, embedModel);
+    }
+
+    if (Array.isArray(vector) && vector.length) {
+      vectorsByText.set(text, vector.slice());
+      setEmbeddingCacheEntry(embedModel, text, vector);
+    }
+  });
+
+  const timestamp = new Date().toISOString();
+
+  textToRecords.forEach((records, text) => {
+    const vector = vectorsByText.get(text);
+    if (!vector || !vector.length) return;
+
+    const embeddingString = embeddingToString(vector);
+    records.forEach(record => {
+      record.embedding = embeddingString;
+      record.embeddingString = embeddingString;
+      record.embeddingModel = embedModel;
+      record.embeddingUpdatedAt = timestamp;
+    });
+  });
 }
 
 function formatSimilarityScore(score) {
