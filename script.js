@@ -3332,7 +3332,17 @@ function showPathCopyModal({ folderPath, basePath, type, copied }) {
 
   const title = type === 'drawing' ? '도면 경로 복사' : '백업 경로 복사';
   const icon = type === 'drawing' ? '📁' : '💾';
-  const statusText = copied ? '폴더 경로가 클립보드에 복사되었습니다.' : '클립보드 복사에 실패했습니다. 아래 경로를 직접 복사하세요.';
+  const statusText = copied
+    ? '폴더 경로가 자동으로 복사되었습니다. 아래 안내에 따라 붙여넣기 하면 파일 탐색기에서 바로 이동할 수 있습니다.'
+    : '클립보드 복사에 실패했습니다. 아래 경로를 직접 복사하여 파일 탐색기에서 붙여넣기 해주세요.';
+
+  const instructionText = copied
+    ? `<ol style="margin:0; padding-left:18px; line-height:1.7; color:#24292f; font-size:0.95em;">
+        <li>Windows 탐색기를 열거나 <strong>Win + E</strong> 키를 눌러 탐색기를 실행합니다.</li>
+        <li>주소 표시줄을 클릭한 뒤 <strong>Ctrl + V</strong> 키로 붙여넣기 합니다.</li>
+        <li><strong>Enter</strong> 키를 눌러 해당 IMO 폴더로 이동합니다.</li>
+      </ol>`
+    : `<p style="margin:0; line-height:1.6; color:#24292f; font-size:0.95em;">경로를 드래그하여 복사한 뒤, 파일 탐색기의 주소 표시줄에 붙여넣고 Enter 키를 눌러 이동하세요.</p>`;
 
   content.innerHTML = `
     <h3 style="margin-top:0; font-size:1.4em; color:#1f6feb;">${icon} ${title}</h3>
@@ -3345,6 +3355,7 @@ function showPathCopyModal({ folderPath, basePath, type, copied }) {
       <p style="margin:0; font-size:0.9em; color:#57606a;">IMO 하위 폴더 경로</p>
       <code style="display:block; margin-top:6px; padding:8px; background:#fff; border:1px solid #d0d7de; border-radius:6px; word-break:break-all;">${folderPath}</code>
     </div>
+    <div style="margin-top:18px; background:#fff8dc; border:1px solid #f1c21b; border-radius:8px; padding:14px;">${instructionText}</div>
   `;
 
   const buttonWrapper = document.createElement('div');
