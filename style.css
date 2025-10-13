@@ -3421,9 +3421,13 @@ td[data-field="imo"] .imo-action-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 6px;
-  font-size: 1.1em;
+  margin-left: 4px;
+  font-size: 1.05em;
   transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+td[data-field="imo"] .imo-action-icon:first-of-type {
+  margin-left: 6px;
 }
 
 td[data-field="imo"] .imo-action-icon:hover {
