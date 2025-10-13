@@ -202,6 +202,8 @@ const currentYear = new Date().getFullYear();
 const historyYears = Array.from({ length: currentYear - historyStartYear + 1 }, (_, i) => historyStartYear + i);
 const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 
+const DEFAULT_DELIVERY_START = '2020-01-01';
+
 // 기본 테이블 열 정의
 const basicColumns = [
   'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
@@ -643,8 +645,30 @@ document.addEventListener('DOMContentLoaded', () => {
   ensureDefaultAdminUser();
 });
 
+function initializeDeliveryDateFilters() {
+  const startInput = document.getElementById('filterDeliveryStart');
+  const endInput = document.getElementById('filterDeliveryEnd');
+  if (!startInput || !endInput) return;
+
+  const todayStr = toYMD(new Date());
+
+  if (!startInput.value) {
+    startInput.value = DEFAULT_DELIVERY_START;
+  }
+
+  if (!endInput.value) {
+    endInput.value = todayStr;
+  }
+
+  const onDateFilterChange = () => applyFilters();
+  startInput.addEventListener('change', onDateFilterChange);
+  endInput.addEventListener('change', onDateFilterChange);
+}
+
 // 모든 이벤트 리스너 등록 함수
 function registerEventListeners() {
+  initializeDeliveryDateFilters();
+
   // 사이드바 관련
   document.getElementById('btnManager').addEventListener('click', () => switchSideMode('manager'));
   document.getElementById('btnOwner').addEventListener('click', () => switchSideMode('owner'));
@@ -885,10 +909,48 @@ function handleFilterChange() {
   if (filterDebounceTimer) {
     clearTimeout(filterDebounceTimer);
   }
-  
+
   filterDebounceTimer = setTimeout(() => {
     applyFilters();
   }, 300); // 300ms 디바운스
+}
+
+function parseDateForFilter(value) {
+  if (!value && value !== 0) return null;
+
+  if (value instanceof Date) {
+    const normalized = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    return isNaN(normalized.getTime()) ? null : normalized;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const dateFromSerial = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+    return isNaN(dateFromSerial.getTime())
+      ? null
+      : new Date(dateFromSerial.getFullYear(), dateFromSerial.getMonth(), dateFromSerial.getDate());
+  }
+
+  let str = String(value).trim();
+  if (!str || str === '#N/A') return null;
+
+  str = str.replace(/[./]/g, '-').replace(/\//g, '-');
+
+  if (/^\d{8}$/.test(str)) {
+    str = `${str.slice(0, 4)}-${str.slice(4, 6)}-${str.slice(6, 8)}`;
+  }
+
+  const simpleMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (simpleMatch) {
+    const [, y, m, d] = simpleMatch;
+    const dateObj = new Date(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T00:00:00`);
+    return isNaN(dateObj.getTime()) ? null : dateObj;
+  }
+
+  const parsed = new Date(str.includes('T') ? str : `${str}T00:00:00`);
+  if (isNaN(parsed.getTime())) return null;
+
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
 }
 
 // applyFilters 함수 수정 - 경과일 필터 추가
@@ -897,7 +959,7 @@ function applyFilters() {
     console.log('데이터가 아직 로드되지 않았습니다.');
     return;
   }
-  
+
   // 필터값 수집
   const filters = {
     imo: document.getElementById('filterIMO').value.toLowerCase().trim(),
@@ -911,13 +973,21 @@ function applyFilters() {
     shipType: document.getElementById('filterShipType').value.toLowerCase().trim(),
     shipyard: document.getElementById('filterShipyard').value.toLowerCase().trim()
   };
-  
+
+  const deliveryStartInput = document.getElementById('filterDeliveryStart');
+  const deliveryEndInput = document.getElementById('filterDeliveryEnd');
+  const deliveryStartDate = deliveryStartInput ? parseDateForFilter(deliveryStartInput.value) : null;
+  const deliveryEndDate = deliveryEndInput ? parseDateForFilter(deliveryEndInput.value) : null;
+  const deliveryStartTime = deliveryStartDate ? deliveryStartDate.getTime() : null;
+  const deliveryEndTime = deliveryEndDate ? deliveryEndDate.getTime() : null;
+
   // 경과일 필터 추가
   const elapsedDayFilter = window.elapsedDayFilter || null;
-  
+
   // 모든 필터가 비어있는지 확인 (경과일 필터 포함)
-  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null;
-  
+  const hasDateFilter = deliveryStartTime !== null || deliveryEndTime !== null;
+  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null || hasDateFilter;
+
   if (!hasActiveFilter) {
     // 필터가 없으면 빈 화면 표시
     filteredData = [];
@@ -987,7 +1057,21 @@ function applyFilters() {
     if (filters.shipyard && !String(row.shipyard || '').toLowerCase().includes(filters.shipyard)) {
       return false;
     }
-    
+
+    if (hasDateFilter) {
+      const deliveryDate = parseDateForFilter(row.delivery);
+      if (!deliveryDate) return false;
+
+      const deliveryTime = deliveryDate.getTime();
+      if (deliveryStartTime !== null && deliveryTime < deliveryStartTime) {
+        return false;
+      }
+
+      if (deliveryEndTime !== null && deliveryTime > deliveryEndTime) {
+        return false;
+      }
+    }
+
     return true;
   });
   
@@ -1104,7 +1188,11 @@ function clearAllFilters() {
   document.getElementById('filterActive').value = '';
   document.getElementById('filterShipType').value = '';
   document.getElementById('filterShipyard').value = '';
-  
+  const deliveryStartInput = document.getElementById('filterDeliveryStart');
+  const deliveryEndInput = document.getElementById('filterDeliveryEnd');
+  if (deliveryStartInput) deliveryStartInput.value = '';
+  if (deliveryEndInput) deliveryEndInput.value = '';
+
   // 경과일 필터도 초기화
   window.elapsedDayFilter = null;
 }
