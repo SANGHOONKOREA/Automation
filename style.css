@@ -1214,7 +1214,10 @@ td button[style*="background:#007bff"]:hover {
 /* 테이블 셀 최소폭 설정 - 기본/확장 뷰에 따른 조정 */
 th[data-field="공번"], td[data-field="공번"] { min-width: 120px; }
 th[data-field="시스템"], td[data-field="시스템"] { min-width: 80px; }
-th[data-field="imo"], td[data-field="imo"] { min-width: 240px; }
+th[data-field="imo"], td[data-field="imo"] {
+  min-width: 200px;
+  max-width: 220px;
+}
 td[data-field="imo"] { white-space: nowrap; }
 th[data-field="api_name"], td[data-field="api_name"] { min-width: 140px; }
 th[data-field="api_owner"], td[data-field="api_owner"] { min-width: 160px; }
