@@ -3325,6 +3325,11 @@ function showPathCopyModal({ folderPath, basePath, type, copied }) {
   const modal = document.createElement('div');
   modal.className = 'modal-background';
   modal.style.zIndex = '10020';
+  modal.style.display = 'flex';
+  modal.style.alignItems = 'center';
+  modal.style.justifyContent = 'center';
+  modal.style.backgroundColor = 'rgba(0, 0, 0, 0.4)';
+  modal.style.padding = '20px';
 
   const content = document.createElement('div');
   content.className = 'modal-content';
@@ -3379,26 +3384,31 @@ function showPathCopyModal({ folderPath, basePath, type, copied }) {
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '닫기';
   closeBtn.style.cssText = 'background:#6c757d; color:#fff; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;';
-  closeBtn.addEventListener('click', () => modal.remove());
   buttonWrapper.appendChild(closeBtn);
 
   content.appendChild(buttonWrapper);
   modal.appendChild(content);
   document.body.appendChild(modal);
 
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) {
-      modal.remove();
-    }
-  });
+  const closeModal = () => {
+    modal.remove();
+    document.removeEventListener('keydown', escHandler);
+  };
 
   const escHandler = (e) => {
     if (e.key === 'Escape') {
-      modal.remove();
-      document.removeEventListener('keydown', escHandler);
+      closeModal();
     }
   };
   document.addEventListener('keydown', escHandler);
+
+  closeBtn.addEventListener('click', closeModal);
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      closeModal();
+    }
+  });
 }
 
 // 클립보드 복사 함수
