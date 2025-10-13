@@ -56,6 +56,7 @@ let managerScheduleStatus = {};
 let isExtendedView = false;
 let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
+let historyCountsByProject = new Map();
 
 // 필터 디바운스 타이머
 let filterDebounceTimer = null;
@@ -70,6 +71,7 @@ function getProjectHistoryRef(project) {
 }
 const aiConfigPath = "as-service/admin/aiConfig";
 const apiConfigPath = "as-service/admin/apiConfig";
+const pathConfigPath = "as-service/admin/pathConfig";
 const userMetaPath = 'as-service/user_meta';
 const adminPasswordPath = 'as-service/admin/password';
 const legacyUsersPath = 'users';
@@ -164,15 +166,35 @@ const scheduleCheckPath = 'as-service/schedule_checks';
 let g_aiConfig = {
   apiKey: "",
   model: "",
+  embedModel: "",
   promptRow: "",
   promptHistory: "",
   promptOwner: ""
 };
 
+let g_pathConfig = {
+  drawingPath: "",
+  backupPath: ""
+};
+
+// 히스토리 임베딩 인덱스 캐시
+let historyEmbeddingIndex = [];
+const historyEmbeddingMap = new Map();
+let historyEmbeddingLoaded = false;
+let historyEmbeddingPromise = null;
+let similarSearchInProgress = false;
+
 let g_apiConfig = {
   apiKey: "",
   baseUrl: "https://api.vesselfinder.com/masterdata"
 };
+
+// 임베딩 요청 캐시 및 토큰 절약 설정
+const EMBEDDING_FIELD_LIMIT_SHORT = 64;
+const EMBEDDING_FIELD_LIMIT_LONG = 600;
+const EMBEDDING_CACHE_LIMIT = 200;
+const EMBEDDING_BATCH_CONCURRENCY = 10;
+const embeddingRequestCache = new Map();
 
 // 연도별 AS 접수 건수 열 생성
 const historyStartYear = 2020;
@@ -184,7 +206,7 @@ const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 const basicColumns = [
   'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty',
-  'manager', '현황', '현황번역', '동작여부', 'historyCount', 'history', 'AS접수일자', '기술적종료일',
+  'manager', '현황', '현황번역', '동작여부', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
   '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -194,7 +216,7 @@ const allColumns = [
   'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty', 'prevManager',
   'manager', '현황', '현황번역', 'ai_summary', '동작여부', '조치계획', '접수내용',
-  '조치결과', 'historyCount', ...historyYearColumns, 'history', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
+  '조치결과', 'historyCount', ...historyYearColumns, 'history', 'similarHistory', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
 // 언어별 텍스트 사전
@@ -224,11 +246,19 @@ const translations = {
     "담당자": "담당자",
     "선주사": "선주사",
     "사용자 관리": "사용자 관리",
+    "도면/백업 경로 관리": "도면/백업 경로 관리",
+    "도면 기본 경로": "도면 기본 경로",
+    "백업 SW 기본 경로": "백업 SW 기본 경로",
     "AI 설정 관리": "AI 설정 관리",
     "API 설정 관리": "API 설정 관리",
     "연결됨": "연결됨",
     "히스토리": "히스토리",
     "담당자별 현황": "담당자별 현황",
+    "유사 AS 검색": "유사 AS 검색",
+    "AI 분석": "AI 분석",
+    "유사 AS 검색 결과": "유사 AS 검색 결과",
+    "유사도": "유사도",
+    "결과 없음": "결과 없음",
     "정상": "정상",
     "부분동작": "부분동작",
     "동작불가": "동작불가",
@@ -316,11 +346,19 @@ const translations = {
     "담당자": "Manager",
     "선주사": "Owner",
     "사용자 관리": "User Management",
+    "도면/백업 경로 관리": "Drawing/Backup Path Management",
+    "도면 기본 경로": "Drawing Base Path",
+    "백업 SW 기본 경로": "Backup SW Base Path",
     "AI 설정 관리": "AI Configuration",
     "API 설정 관리": "API Configuration",
     "연결됨": "Connected",
     "히스토리": "History",
     "담당자별 현황": "Manager Status",
+    "유사 AS 검색": "Similar AS Search",
+    "AI 분석": "AI Analyze",
+    "유사 AS 검색 결과": "Similar AS Search Results",
+    "유사도": "Similarity",
+    "결과 없음": "No results",
     "정상": "Normal",
     "부분동작": "Partial Operation",
     "동작불가": "Inoperable",
@@ -411,11 +449,19 @@ const translations = {
     "담당자": "负责人",
     "선주사": "船东",
     "사용자 관리": "用户管理",
+    "도면/백업 경로 관리": "图纸/备份路径管理",
+    "도면 기본 경로": "图纸基础路径",
+    "백업 SW 기본 경로": "备份软件基础路径",
     "AI 설정 관리": "AI设置管理",
     "API 설정 관리": "API设置管理",
     "연결됨": "已连接",
     "히스토리": "历史",
     "담당자별 현황": "负责人状态",
+    "유사 AS 검색": "相似AS搜索",
+    "AI 분석": "AI分析",
+    "유사 AS 검색 결과": "相似AS搜索结果",
+    "유사도": "相似度",
+    "결과 없음": "无结果",
     "정상": "正常",
     "부분동작": "部分运行",
     "동작불가": "无法运行",
@@ -505,11 +551,19 @@ const translations = {
     "담당자": "担当者",
     "선주사": "船主",
     "사용자 관리": "ユーザー管理",
+    "도면/백업 경로 관리": "図面/バックアップパス管理",
+    "도면 기본 경로": "図面基本パス",
+    "백업 SW 기본 경로": "バックアップSW基本パス",
     "AI 설정 관리": "AI設定管理",
     "API 설정 관리": "API設定管理",
     "연결됨": "接続済み",
     "히스토리": "履歴",
     "담당자별 현황": "担当者別状況",
+    "유사 AS 검색": "類似AS検索",
+    "AI 분석": "AI分析",
+    "유사 AS 검색 결과": "類似AS検索結果",
+    "유사도": "類似度",
+    "결과 없음": "結果なし",
     "정상": "正常",
     "부분동작": "部分動作",
     "동작불가": "動作不可",
@@ -601,6 +655,7 @@ function registerEventListeners() {
   
   // 사용자 관리 관련
   document.getElementById('userManageBtn').addEventListener('click', () => checkAdminPassword(openUserModal));
+  document.getElementById('pathConfigBtn').addEventListener('click', () => checkAdminPassword(openPathConfigModal));
   document.getElementById('addUserConfirmBtn').addEventListener('click', addNewUser);
   document.getElementById('deleteSelectedUsersBtn').addEventListener('click', deleteSelectedUsers);
   
@@ -613,7 +668,14 @@ function registerEventListeners() {
   document.getElementById('apiConfigBtn').addEventListener('click', () => checkAdminPassword(openApiConfigModal));
   document.getElementById('saveApiConfigBtn').addEventListener('click', saveApiConfig);
   document.getElementById('apiRefreshAllBtn').addEventListener('click', () => checkAdminPassword(refreshAllVessels));
-  
+  document.getElementById('savePathConfigBtn').addEventListener('click', savePathConfig);
+  document.getElementById('pathConfigCancelBtn').addEventListener('click', closePathConfigModal);
+  document.getElementById('pathConfigModal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closePathConfigModal();
+    }
+  });
+
   // 테이블 관련
   document.getElementById('asTable').addEventListener('click', handleTableClick);
   document.getElementById('selectAll').addEventListener('change', toggleSelectAll);
@@ -720,7 +782,12 @@ function registerEventListeners() {
       if (apiProgressModal && apiProgressModal.style.display === 'block') {
         apiProgressModal.style.display = 'none';
       }
-      
+
+      const similarHistoryModal = document.getElementById('similarHistoryModal');
+      if (similarHistoryModal && similarHistoryModal.style.display === 'block') {
+        closeSimilarHistoryModal();
+      }
+
       const apiConfigModal = document.getElementById('apiConfigModal');
       if (apiConfigModal && apiConfigModal.style.display === 'block') {
         closeApiConfigModal();
@@ -1156,6 +1223,7 @@ function renderTableHeaders() {
     '조치결과': { field: '조치결과', text: '조치결과' },
     'historyCount': { field: null, text: 'AS접수건수', isHistoryCount: true },
     'history': { field: null, text: '히스토리', isHistory: true },
+    'similarHistory': { field: null, text: '유사 AS 검색', isSimilar: true },
     'AS접수일자': { field: 'AS접수일자', text: 'AS접수일자' },
     '기술적종료일': { field: '기술적종료일', text: '기술적종료일' },
     '경과일': { field: '경과일', text: '경과일' },
@@ -1359,19 +1427,39 @@ function updateUILanguage() {
     'btnManager': '담당자',
     'btnOwner': '선주사',
     'userManageBtn': '사용자 관리',
+    'pathConfigBtn': '도면/백업 경로 관리',
+    'savePathConfigBtn': '저장',
     'aiConfigBtn': 'AI 설정 관리',
     'apiConfigBtn': 'API 설정 관리'
   };
   
   document.querySelectorAll('button').forEach(btn => {
     if (btn.classList.contains('lang-btn')) return;
-    
+
     if (btn.id && buttonMappings[btn.id]) {
       const koKey = buttonMappings[btn.id];
       btn.textContent = langData[koKey] || koKey;
     }
   });
-  
+
+  const pathConfigModal = document.getElementById('pathConfigModal');
+  if (pathConfigModal) {
+    const titleEl = pathConfigModal.querySelector('h2');
+    if (titleEl) {
+      titleEl.textContent = langData['도면/백업 경로 관리'] || '도면/백업 경로 관리';
+    }
+
+    const drawingLabel = pathConfigModal.querySelector('label[for="drawingPathInput"]');
+    if (drawingLabel) {
+      drawingLabel.textContent = langData['도면 기본 경로'] || '도면 기본 경로';
+    }
+
+    const backupLabel = pathConfigModal.querySelector('label[for="backupPathInput"]');
+    if (backupLabel) {
+      backupLabel.textContent = langData['백업 SW 기본 경로'] || '백업 SW 기본 경로';
+    }
+  }
+
   // 사이드바 제목
   const listTitle = document.getElementById('listTitle');
   if (listTitle) {
@@ -1515,6 +1603,7 @@ function showMainInterface() {
     loadData();
     loadAiConfig();
     loadApiConfig();
+    loadPathConfig();
     dataLoaded = true;
   }
 }
@@ -1990,6 +2079,7 @@ async function addNewUser() {
 function openAiConfigModal() {
   document.getElementById('aiApiKey').value = g_aiConfig.apiKey || "";
   document.getElementById('aiModel').value = g_aiConfig.model || "";
+  document.getElementById('aiEmbedModel').value = g_aiConfig.embedModel || "";
   document.getElementById('aiPromptRow').value = g_aiConfig.promptRow || "";
   document.getElementById('aiPromptHistory').value = g_aiConfig.promptHistory || "";
   document.getElementById('aiPromptOwner').value = g_aiConfig.promptOwner || "";
@@ -1998,9 +2088,11 @@ function openAiConfigModal() {
 }
 
 async function saveAiConfig() {
+  const previousConfig = { ...g_aiConfig };
   const newConfig = {
     apiKey: document.getElementById('aiApiKey').value.trim(),
     model: document.getElementById('aiModel').value.trim(),
+    embedModel: document.getElementById('aiEmbedModel').value.trim(),
     promptRow: document.getElementById('aiPromptRow').value,
     promptHistory: document.getElementById('aiPromptHistory').value,
     promptOwner: document.getElementById('aiPromptOwner').value
@@ -2008,13 +2100,85 @@ async function saveAiConfig() {
   await db.ref(aiConfigPath).set(newConfig);
   alert("AI 설정이 저장되었습니다.");
   g_aiConfig = newConfig;
+
+  if (previousConfig.embedModel !== newConfig.embedModel || previousConfig.apiKey !== newConfig.apiKey) {
+    invalidateHistoryEmbeddingIndex();
+  }
+
   document.getElementById('aiConfigModal').style.display = 'none';
 }
 
 async function loadAiConfig() {
   const snap = await db.ref(aiConfigPath).once('value');
   if (snap.exists()) {
-    g_aiConfig = snap.val();
+    g_aiConfig = {
+      apiKey: '',
+      model: '',
+      embedModel: '',
+      promptRow: '',
+      promptHistory: '',
+      promptOwner: '',
+      ...snap.val()
+    };
+  }
+}
+
+/** ==================================
+ *  도면/백업 경로 관리
+ * ===================================*/
+function openPathConfigModal() {
+  document.getElementById('drawingPathInput').value = g_pathConfig.drawingPath || '';
+  document.getElementById('backupPathInput').value = g_pathConfig.backupPath || '';
+  document.getElementById('pathConfigModal').style.display = 'block';
+}
+
+function closePathConfigModal() {
+  document.getElementById('pathConfigModal').style.display = 'none';
+}
+
+async function savePathConfig() {
+  const drawingInput = document.getElementById('drawingPathInput');
+  const backupInput = document.getElementById('backupPathInput');
+
+  const drawingPath = sanitizeBasePathValue((drawingInput?.value || '').trim());
+  const backupPath = sanitizeBasePathValue((backupInput?.value || '').trim());
+
+  const payload = {
+    drawingPath,
+    backupPath,
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    await db.ref(pathConfigPath).set(payload);
+    g_pathConfig = {
+      drawingPath,
+      backupPath
+    };
+
+    alert('경로 설정이 저장되었습니다.');
+    closePathConfigModal();
+  } catch (error) {
+    console.error('경로 설정 저장 오류:', error);
+    alert('경로 설정 저장 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+  }
+}
+
+async function loadPathConfig() {
+  try {
+    const snap = await db.ref(pathConfigPath).once('value');
+    if (snap.exists()) {
+      const value = snap.val() || {};
+      g_pathConfig = {
+        drawingPath: sanitizeBasePathValue((value.drawingPath || '').trim()),
+        backupPath: sanitizeBasePathValue((value.backupPath || '').trim())
+      };
+    } else {
+      g_pathConfig = { drawingPath: '', backupPath: '' };
+    }
+  } catch (error) {
+    console.error('경로 설정 로드 오류:', error);
+    g_pathConfig = { drawingPath: '', backupPath: '' };
   }
 }
 
@@ -2202,6 +2366,63 @@ function testConnection() {
     });
 }
 
+function createEmptyHistoryCounts() {
+  return { perYear: {}, total: 0 };
+}
+
+function normalizeProjectKey(value = '') {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function assignHistoryCountsToRows(countMap = new Map(), rows = asData) {
+  if (!Array.isArray(rows)) return;
+
+  rows.forEach(row => {
+    if (!row || typeof row !== 'object') return;
+
+    const candidates = [
+      row.공번,
+      row.project,
+      row.Project,
+      row.projectCode
+    ];
+
+    let assigned = false;
+    for (const candidate of candidates) {
+      const normalized = normalizeProjectKey(candidate);
+      if (!normalized) continue;
+
+      const possibleKeys = [
+        normalized,
+        normalized.toLowerCase(),
+        sanitizeKey(normalized)
+      ];
+
+      for (const key of possibleKeys) {
+        if (!key) continue;
+        const counts = countMap.get(key);
+        if (!counts) continue;
+
+        row.historyCounts = {
+          total: counts.total || 0,
+          perYear: { ...counts.perYear }
+        };
+        assigned = true;
+        break;
+      }
+
+      if (assigned) {
+        break;
+      }
+    }
+
+    if (!assigned) {
+      row.historyCounts = createEmptyHistoryCounts();
+    }
+  });
+}
+
 async function loadData() {
   const snap = await db.ref(asPath).once('value');
   const val = snap.val() || {};
@@ -2244,12 +2465,14 @@ async function loadData() {
       r.동작여부 = "정상";
     }
 
+    r.historyCounts = createEmptyHistoryCounts();
     asData.push(r);
   });
 
   console.log(`데이터 로드 완료: 총 ${asData.length}개 (원본: ${Object.keys(val).length}개)`);
 
   await loadHistoryCounts();
+  loadHistoryEmbeddingIndex().catch(err => console.error('히스토리 임베딩 사전 로드 오류:', err));
 
   dataLoaded = true;
   updateSidebarList();
@@ -2258,26 +2481,56 @@ async function loadData() {
 
 // 히스토리 건수 로드
 async function loadHistoryCounts() {
-  const tasks = asData.map(row =>
-    getProjectHistoryRef(row.공번).once('value').then(snapshot => {
-      const data = snapshot.val() || {};
+  try {
+    const snapshot = await db.ref(aiHistoryPath).once('value');
+    const data = snapshot.val() || {};
+    const countMap = new Map();
+
+    Object.entries(data).forEach(([projectKey, records]) => {
+      if (!records || typeof records !== 'object') return;
+
       const perYear = {};
       let total = 0;
-      Object.values(data).forEach(rec => {
-        if (!rec.AS접수일자) return;
-        const year = parseInt(rec.AS접수일자.substring(0, 4), 10);
-        if (year >= 2020) {
-          perYear[year] = (perYear[year] || 0) + 1;
-          total++;
+
+      Object.values(records).forEach(rec => {
+        if (!rec || typeof rec !== 'object') return;
+
+        const dateStr = normalizeProjectKey(rec.AS접수일자 || '');
+        if (!dateStr) return;
+
+        const year = parseInt(dateStr.substring(0, 4), 10);
+        if (!Number.isFinite(year) || year < historyStartYear) return;
+
+        perYear[year] = (perYear[year] || 0) + 1;
+        total++;
+      });
+
+      const normalizedKey = normalizeProjectKey(projectKey);
+      if (!normalizedKey) return;
+
+      const counts = { perYear, total };
+      const keyVariants = new Set([
+        normalizedKey,
+        normalizedKey.toLowerCase(),
+        sanitizeKey(normalizedKey)
+      ]);
+
+      keyVariants.forEach(key => {
+        if (key) {
+          countMap.set(key, counts);
         }
       });
-      row.historyCounts = { perYear, total };
-    }).catch(err => {
-      console.error('히스토리 건수 로드 오류:', err);
-      row.historyCounts = { perYear: {}, total: 0 };
-    })
-  );
-  await Promise.all(tasks);
+    });
+
+    historyCountsByProject = countMap;
+    assignHistoryCountsToRows(historyCountsByProject);
+    return historyCountsByProject;
+  } catch (error) {
+    console.error('히스토리 건수 로드 오류:', error);
+    historyCountsByProject = new Map();
+    assignHistoryCountsToRows(historyCountsByProject);
+    return historyCountsByProject;
+  }
 }
 
 // onCellChange 함수
@@ -2685,6 +2938,8 @@ function createTableCell(row, columnKey) {
       return createHistoryCountCell(row);
     case 'history':
       return createHistoryCell(row);
+    case 'similarHistory':
+      return createSimilarHistoryCell(row);
     case '경과일':
       return createElapsedDaysCell(row);
     case '정상지연':
@@ -2767,6 +3022,22 @@ function createHistoryCell(row) {
   btn.style.color = "#fff";
   btn.style.cursor = "pointer";
   btn.addEventListener('click', () => showHistoryDataWithFullscreen(row.공번));
+  td.appendChild(btn);
+  return td;
+}
+
+// 유사 AS 검색 버튼 셀 생성
+function createSimilarHistoryCell(row) {
+  const td = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.textContent = translations[currentLanguage]["AI 분석"] || "AI 분석";
+  btn.style.background = "#17a2b8";
+  btn.style.color = "#fff";
+  btn.style.cursor = "pointer";
+  btn.style.border = "none";
+  btn.style.borderRadius = "4px";
+  btn.style.padding = "4px 8px";
+  btn.addEventListener('click', () => handleSimilarHistorySearch(row));
   td.appendChild(btn);
   return td;
 }
@@ -2916,9 +3187,10 @@ function createDataCell(row, field) {
     td.appendChild(inp);
 
     const linkIcon = document.createElement('span');
-    linkIcon.textContent = ' 🔎';
+    linkIcon.textContent = '🔎';
     linkIcon.style.cursor = 'pointer';
     linkIcon.title = '새 창에서 조회';
+    linkIcon.classList.add('imo-action-icon');
     linkIcon.addEventListener('click', () => {
       const imoVal = inp.value.trim();
       if (imoVal) {
@@ -2927,18 +3199,31 @@ function createDataCell(row, field) {
     });
     td.appendChild(linkIcon);
 
-    const pdfIcon = document.createElement('span');
-    pdfIcon.textContent = ' 📄';
-    pdfIcon.style.cursor = 'pointer';
-    pdfIcon.title = 'PDF 도면 열기';
-    pdfIcon.style.marginLeft = '5px';
-    pdfIcon.addEventListener('click', () => {
+    const drawingIcon = document.createElement('span');
+    drawingIcon.textContent = '📁';
+    drawingIcon.style.cursor = 'pointer';
+    drawingIcon.title = '도면 경로 복사';
+    drawingIcon.classList.add('imo-action-icon');
+    drawingIcon.addEventListener('click', () => {
       const imoVal = inp.value.trim();
       if (imoVal) {
         openPdfDrawing(imoVal);
       }
     });
-    td.appendChild(pdfIcon);
+    td.appendChild(drawingIcon);
+
+    const backupIcon = document.createElement('span');
+    backupIcon.textContent = '💾';
+    backupIcon.style.cursor = 'pointer';
+    backupIcon.title = '백업 경로 복사';
+    backupIcon.classList.add('imo-action-icon');
+    backupIcon.addEventListener('click', () => {
+      const imoVal = inp.value.trim();
+      if (imoVal) {
+        openBackupSoftwarePath(imoVal);
+      }
+    });
+    td.appendChild(backupIcon);
   } else if (['조치계획', '접수내용', '조치결과'].includes(field)) {
     const inp = document.createElement('input');
     inp.type = 'text';
@@ -2991,138 +3276,118 @@ function createDataCell(row, field) {
 }
 
 /** ==================================
- *  PDF 파일 열기 기능 - 파일 탐색기에서 열기
+ *  도면/백업 경로 복사 기능
  * ===================================*/
 function openPdfDrawing(imoNo) {
+  copyImoFolderPath('drawing', imoNo);
+}
+
+function openBackupSoftwarePath(imoNo) {
+  copyImoFolderPath('backup', imoNo);
+}
+
+async function copyImoFolderPath(type, imoNo) {
   if (!imoNo) {
     alert('IMO 번호가 없습니다.');
     return;
   }
-  
-  // 서버 경로 설정
-  const serverPath = '\\\\10.101.10.20\\32.고객관리\\CS_박용\\9.개인폴더\\이제창\\FINAL DRAWING';
-  const fileName = `${imoNo}.pdf`;
-  const fullPath = `${serverPath}\\${fileName}`;
-  
-  // 바로 파일 탐색기로 폴더 열기 시도
-  openFolderInExplorer();
-  
-function openFolderInExplorer() {
-  try {
-    // 폴더 경로와 파일명을 함께 복사 (전체 경로)
-    copyToClipboard(fullPath);
-    
-    // 파일명도 별도로 저장
-    sessionStorage.setItem('pdfFileName', fileName);
-    
-    // 안내 모달 표시
-    showExplorerInstructions(serverPath, fileName, fullPath);
-    
-  } catch (e) {
-    console.error('폴더 열기 실패:', e);
-    // 실패 시에도 전체 경로 복사
-    copyToClipboard(fullPath);
-    showDetailedInstructions(fullPath);
+
+  const basePath = type === 'drawing' ? g_pathConfig.drawingPath : g_pathConfig.backupPath;
+  if (!basePath) {
+    const message = type === 'drawing'
+      ? '도면 기본 경로가 설정되어 있지 않습니다. 관리자에게 경로 설정을 요청해주세요.'
+      : '백업 SW 기본 경로가 설정되어 있지 않습니다. 관리자에게 경로 설정을 요청해주세요.';
+    alert(message);
+    return;
   }
+
+  const folderPath = buildImoFolderPath(basePath, imoNo);
+  const copied = await copyToClipboard(folderPath);
+  showPathCopyModal({
+    folderPath,
+    basePath,
+    type,
+    copied
+  });
 }
-  
-  // 파일 탐색기 안내 모달
-function showExplorerInstructions(folderPath, fileName, fullPath) {
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.7);
-      z-index: 10000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(4px);
-    `;
-    
-    const content = document.createElement('div');
-    content.style.cssText = `
-      background: white;
-      padding: 35px;
-      border-radius: 12px;
-      max-width: 600px;
-      box-shadow: 0 15px 50px rgba(0, 0, 0, 0.4);
-      animation: modalSlideIn 0.3s ease-out;
-    `;
-    
-    
-    const confirmBtn = document.createElement('button');
-    confirmBtn.textContent = '확인';
-    confirmBtn.style.cssText = `
-      background: #007bff;
-      color: white;
-      border: none;
-      padding: 10px 30px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.9em;
-      font-weight: 600;
-      transition: all 0.3s ease;
-    `;
-    confirmBtn.onclick = function() {
-      modal.remove();
-    };
-    
-    content.innerHTML = `
-      <h3 style="margin-top:0; color:#28a745; font-size:1.5em;">📁 파일 탐색기에서 PDF 파일 열기</h3>
-      
-      <div style="background:#f0f8ff; padding:20px; border-radius:8px; margin:20px 0; border-left:4px solid #007bff;">
-<p style="font-size:1.1em; margin:0 0 15px 0; font-weight:600;">
-  전체 파일 경로가 클립보드에 복사되었습니다!
-        </p>
-        <p style="margin:0; line-height:1.8;">
-          1. <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">Win</kbd> + 
-             <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">E</kbd> 키를 눌러 파일 탐색기를 엽니다<br>
-          2. 주소창을 클릭하고 <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">Ctrl</kbd> + 
-             <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">V</kbd>로 붙여넣기<br>
-          3. <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">Enter</kbd> 키를 누릅니다<br>
-4. 붙여넣기한 파일을 바로 열 수 있습니다
-        </p>
-      </div>
-      
-      <div style="background:#f8f9fa; padding:15px; border-radius:6px; margin-bottom:20px;">
-        <p style="margin:0; font-size:0.9em; color:#666;">
-          <strong>폴더 경로:</strong><br>
-          <code style="background:#fff; padding:8px; display:block; margin-top:5px; border:1px solid #ddd; border-radius:4px; font-size:0.85em; word-break:break-all;">
-            ${folderPath}
-          </code>
-        </p>
-      </div>
-      
-      <div style="display:flex; gap:10px; justify-content:center;">
-      </div>
-    `;
-    
-const buttonContainer = content.querySelector('div:last-child');
-buttonContainer.appendChild(confirmBtn);
-    
-    modal.appendChild(content);
-    document.body.appendChild(modal);
-    
-    // 모달 외부 클릭으로 닫기
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
-        modal.remove();
+
+function buildImoFolderPath(basePath, imoNo) {
+  const sanitizedBase = sanitizeBasePathValue(basePath);
+  return `${sanitizedBase}\\${imoNo}`;
+}
+
+function sanitizeBasePathValue(pathValue) {
+  if (!pathValue) return '';
+  return pathValue.replace(/[\\/]+$/, '');
+}
+
+function showPathCopyModal({ folderPath, basePath, type, copied }) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-background';
+  modal.style.zIndex = '10020';
+
+  const content = document.createElement('div');
+  content.className = 'modal-content';
+  content.style.maxWidth = '520px';
+
+  const title = type === 'drawing' ? '도면 경로 복사' : '백업 경로 복사';
+  const icon = type === 'drawing' ? '📁' : '💾';
+  const statusText = copied ? '폴더 경로가 클립보드에 복사되었습니다.' : '클립보드 복사에 실패했습니다. 아래 경로를 직접 복사하세요.';
+
+  content.innerHTML = `
+    <h3 style="margin-top:0; font-size:1.4em; color:#1f6feb;">${icon} ${title}</h3>
+    <p style="margin-bottom:15px; line-height:1.6;">${statusText}</p>
+    <div style="background:#f6f8fa; border-radius:8px; padding:15px; margin-bottom:15px;">
+      <p style="margin:0; font-size:0.9em; color:#57606a;">기본 경로</p>
+      <code style="display:block; margin-top:6px; padding:8px; background:#fff; border:1px solid #d0d7de; border-radius:6px; word-break:break-all;">${basePath}</code>
+    </div>
+    <div style="background:#f6f8fa; border-radius:8px; padding:15px;">
+      <p style="margin:0; font-size:0.9em; color:#57606a;">IMO 하위 폴더 경로</p>
+      <code style="display:block; margin-top:6px; padding:8px; background:#fff; border:1px solid #d0d7de; border-radius:6px; word-break:break-all;">${folderPath}</code>
+    </div>
+  `;
+
+  const buttonWrapper = document.createElement('div');
+  buttonWrapper.style.cssText = 'display:flex; justify-content:flex-end; gap:10px; margin-top:20px;';
+
+  if (!copied) {
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '경로 복사';
+    copyBtn.style.cssText = 'background:#1f883d; color:#fff; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;';
+    copyBtn.addEventListener('click', async () => {
+      const success = await copyToClipboard(folderPath);
+      if (success) {
+        alert('경로가 복사되었습니다. 파일 탐색기에 붙여넣기하세요.');
+      } else {
+        alert('복사에 실패했습니다. 경로를 직접 선택하여 복사해주세요.');
       }
     });
-    
-    // ESC 키로 닫기
-    const escHandler = (e) => {
-      if (e.key === 'Escape') {
-        modal.remove();
-        document.removeEventListener('keydown', escHandler);
-      }
-    };
-    document.addEventListener('keydown', escHandler);
+    buttonWrapper.appendChild(copyBtn);
   }
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '닫기';
+  closeBtn.style.cssText = 'background:#6c757d; color:#fff; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;';
+  closeBtn.addEventListener('click', () => modal.remove());
+  buttonWrapper.appendChild(closeBtn);
+
+  content.appendChild(buttonWrapper);
+  modal.appendChild(content);
+  document.body.appendChild(modal);
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      modal.remove();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
 }
 
 // 클립보드 복사 함수
@@ -3944,7 +4209,21 @@ function downloadExcel() {
         return row;
       });
 
-      const ws = XLSX.utils.json_to_sheet(arr);
+      const templateHeaders = [
+        '공번', '시스템', 'IMO', 'HULL', 'PROJECT', 'SHIPNAME', 'SHIPOWNER',
+        'API_NAME', 'API_OWNER', 'API_MANAGER', '호선 대표메일', 'SHIP TYPE', 'SHIPYARD', 'AS 구분',
+        '인도일', '보증종료일', '전 담당', '현 담당', '현황', '현황번역', '동작여부', '조치계획', '접수내용',
+        '조치결과', 'AS접수건수', 'H/W TYPE', 'SOFTWARE', 'CPU ROM VER', 'RAU ROM VER'
+      ];
+      const trailingHeaders = ['AS접수일자', '기술적종료일', '정상지연', '지연 사유', '수정일'];
+      const headerRow = [...templateHeaders, ...historyYears.map(String), ...trailingHeaders];
+
+      const sheetData = [headerRow];
+      arr.forEach(rowObj => {
+        sheetData.push(headerRow.map(key => (rowObj[key] ?? '')));
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "AS_Data");
       
@@ -3986,13 +4265,13 @@ function readExcelFile(file, mode) {
     loadingEl.textContent = '엑셀 데이터 처리 중...';
     document.body.appendChild(loadingEl);
     
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         const data = new Uint8Array(evt.target.result);
         const wb = XLSX.read(data, {type: 'array', cellDates: true, dateNF: "yyyy-mm-dd"});
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const json = XLSX.utils.sheet_to_json(sheet, {defval: ""});
-        
+
         // 수정 전: 기존 데이터의 API 정보를 보존하기 위한 맵 생성
         const existingApiData = {};
         asData.forEach(row => {
@@ -4194,8 +4473,8 @@ function handleAsStatusUpload(e) {
 
 function readAsStatusFile(file) {
   const reader = new FileReader();
-  
-  reader.onload = function(evt) {
+
+  reader.onload = async function(evt) {
     let loadingEl = document.createElement('div');
     loadingEl.style.position = 'fixed';
     loadingEl.style.top = '50%';
@@ -4208,26 +4487,33 @@ function readAsStatusFile(file) {
     loadingEl.style.zIndex = '9999';
     loadingEl.textContent = 'AS 현황 데이터 처리 중...';
     document.body.appendChild(loadingEl);
-    
-    setTimeout(() => {
+
+    const setLoadingMessage = (message) => {
+      if (loadingEl) {
+        loadingEl.textContent = message;
+      }
+    };
+
+    setTimeout(async () => {
       try {
+        setLoadingMessage('엑셀 데이터를 파싱하는 중...');
         const data = new Uint8Array(evt.target.result);
-        const wb = XLSX.read(data, {type: 'array', cellDates: true, dateNF: "yyyy-mm-dd"});
+        const wb = XLSX.read(data, { type: 'array', cellDates: true, dateNF: "yyyy-mm-dd" });
         const sheet = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json(sheet, {defval: ""});
-        
+        const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
         const map = {};
         const projectCount = {};
         const batchAiRecords = {};
         const now = new Date().toISOString().split('T')[0];
-        
+
         json.forEach(row => {
           const asStatus = (row['AS진행상태'] || '').trim();
           if (asStatus === '접수취소') return;
-          
+
           const project = (row['수익프로젝트'] || '').trim();
           if (!project) return;
-          
+
           const asDateRaw = row['AS접수일자'] || '';
           let asDateFormatted = '';
           if (asDateRaw) {
@@ -4236,13 +4522,13 @@ function readAsStatusFile(file) {
               asDateFormatted = dateToYMD(asDateObj.getTime());
             }
           }
-          
+
           const tEndRaw = row['기술적종료일자'] || '';
           let tEndFormatted = '';
           if (tEndRaw) {
             tEndFormatted = parseDateString(tEndRaw);
           }
-          
+
           const aiRecordKey = getProjectHistoryRef(project).push().key;
           batchAiRecords[`${aiHistoryPath}/${project}/${aiRecordKey}`] = {
             project: project,
@@ -4253,45 +4539,47 @@ function readAsStatusFile(file) {
             기술적종료일: tEndFormatted,
             timestamp: new Date().toISOString()
           };
-          
+
           if (!projectCount[project]) {
             projectCount[project] = 1;
           } else {
             projectCount[project]++;
           }
-          
+
           const asDateMS = asDateRaw ? new Date(asDateRaw.replace(/[./]/g, '-') + "T00:00").getTime() : 0;
-          
           if (isNaN(asDateMS)) return;
-          
+
           const plan = row['조치계획'] || '';
           const rec = row['접수내용'] || '';
           const res = row['조치결과'] || '';
           const tEnd = tEndRaw || '';
-          
+
           if (!map[project]) {
-            map[project] = {asDate: asDateMS, plan, rec, res, tEnd};
+            map[project] = { asDate: asDateMS, plan, rec, res, tEnd };
           } else if (asDateMS > map[project].asDate) {
-            map[project] = {asDate: asDateMS, plan, rec, res, tEnd};
+            map[project] = { asDate: asDateMS, plan, rec, res, tEnd };
           }
         });
-        
+
+        setLoadingMessage('유사도 분석을 위한 임베딩을 준비하는 중...');
+        await attachEmbeddingsToHistoryBatch(batchAiRecords);
+
         for (const recordPath in batchAiRecords) {
           const project = batchAiRecords[recordPath].project;
           if (projectCount[project]) {
             batchAiRecords[recordPath].접수건수 = projectCount[project];
           }
         }
-        
+
         const updates = {};
-        
         Object.assign(updates, batchAiRecords);
-        
+
         let updateCount = 0;
+        setLoadingMessage('데이터를 정리하고 있습니다...');
         for (let project in map) {
           const item = map[project];
           const row = asData.find(x => x.공번 === project);
-          
+
           if (row) {
             row.조치계획 = item.plan;
             row.접수내용 = item.rec;
@@ -4300,7 +4588,7 @@ function readAsStatusFile(file) {
             row["AS접수일자"] = dateToYMD(item.asDate);
             row["수정일"] = now;
             row["현황번역"] = "";
-            
+
             updates[`${asPath}/${row.uid}/조치계획`] = row.조치계획;
             updates[`${asPath}/${row.uid}/접수내용`] = row.접수내용;
             updates[`${asPath}/${row.uid}/조치결과`] = row.조치결과;
@@ -4308,38 +4596,43 @@ function readAsStatusFile(file) {
             updates[`${asPath}/${row.uid}/AS접수일자`] = row["AS접수일자"];
             updates[`${asPath}/${row.uid}/수정일`] = row["수정일"];
             updates[`${asPath}/${row.uid}/현황번역`] = "";
-            
+
             updateCount++;
           }
         }
-        
-        db.ref().update(updates)
-          .then(() => {
-            addHistory(`AS 현황 업로드 - 총 ${updateCount}건 접수/조치정보 갱신`);
-            
-            // 현재 필터 상태에 따라 테이블 업데이트
-            if (filteredData.length > 0) {
-              updateTable();
-            }
-            
-            document.body.removeChild(loadingEl);
-            alert(`AS 현황 업로드 완료 (총 ${updateCount}건 업데이트)`);
-          })
-          .catch(err => {
-            console.error("AS 현황 업로드 오류:", err);
-            document.body.removeChild(loadingEl);
-            alert("데이터 저장 중 오류가 발생했습니다.");
-          });
+
+        try {
+          setLoadingMessage(`Firebase에 데이터를 저장하는 중... (${updateCount}건)`);
+          await db.ref().update(updates);
+
+          addHistory(`AS 현황 업로드 - 총 ${updateCount}건 접수/조치정보 갱신`);
+          invalidateHistoryEmbeddingIndex();
+          await loadHistoryCounts();
+
+          if (filteredData.length > 0) {
+            updateTable();
+          }
+
+          setLoadingMessage('AS 현황 업로드가 완료되었습니다.');
+          alert(`AS 현황 업로드 완료 (총 ${updateCount}건 업데이트)`);
+        } catch (err) {
+          console.error("AS 현황 업로드 오류:", err);
+          alert("데이터 저장 중 오류가 발생했습니다.");
+        }
       } catch (err) {
         console.error("AS 현황 파일 처리 오류:", err);
-        document.body.removeChild(loadingEl);
         alert("AS 현황 파일 처리 중 오류가 발생했습니다.");
+      } finally {
+        if (loadingEl && document.body.contains(loadingEl)) {
+          document.body.removeChild(loadingEl);
+        }
       }
     }, 100);
-  };
-  
-  reader.readAsArrayBuffer(file);
-}
+    };
+
+
+    reader.readAsArrayBuffer(file);
+  }
 
 function parseDateString(str) {
   if (!str) return '';
@@ -4743,7 +5036,7 @@ async function callGeminiForSummary(contentText, apiKey, modelName) {
   try {
     const model = modelName || "gemini-1.5-pro-latest";
     updateAiProgressText(`Gemini 모델(${model}) 호출 중...\n`);
-    
+
     const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`;
     
     const response = await fetch(url, {
@@ -4776,6 +5069,633 @@ async function callGeminiForSummary(contentText, apiKey, modelName) {
     console.error("Gemini API 요청 오류:", err);
     updateAiProgressText("\n[에러 발생]\n" + err.message);
     return "";
+  }
+}
+
+/** ==================================
+ *  유사 AS 검색 & 임베딩
+ * ===================================*/
+function getActiveEmbeddingModel() {
+  const configured = (g_aiConfig.embedModel || '').trim();
+  if (configured) return configured;
+
+  const baseModel = (g_aiConfig.model || '').trim().toLowerCase();
+  if (baseModel.startsWith('gpt')) return 'text-embedding-3-large';
+  if (baseModel.includes('gemini')) return 'text-embedding-004';
+  return 'text-embedding-3-large';
+}
+
+function isGeminiEmbeddingModel(modelName = '') {
+  const lower = modelName.toLowerCase();
+  if (!lower) return false;
+  if (lower.includes('gemini')) return true;
+  if (lower.startsWith('text-embedding-0')) return true;
+  if (lower.startsWith('multilingual-embedding')) return true;
+  return false;
+}
+
+function embeddingToString(vector = []) {
+  if (!Array.isArray(vector) || !vector.length) return '';
+  return vector.map(v => Number(v).toFixed(6)).join(',');
+}
+
+function stringToEmbedding(value = '') {
+  if (!value) return [];
+  return value.split(',').map(v => parseFloat(v)).filter(num => Number.isFinite(num));
+}
+
+function normalizeEmbeddingField(value = '') {
+  if (value === null || value === undefined) return '';
+  const text = typeof value === 'string' ? value : String(value);
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function truncateEmbeddingField(value = '', limit = EMBEDDING_FIELD_LIMIT_LONG) {
+  if (!value) return '';
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}…`;
+}
+
+function prepareEmbeddingField(value = '', limit = EMBEDDING_FIELD_LIMIT_LONG) {
+  const normalized = normalizeEmbeddingField(value);
+  if (!normalized) return '';
+  return truncateEmbeddingField(normalized, limit);
+}
+
+function getEmbeddingCacheKey(text = '', modelName = '') {
+  if (!text || !modelName) return '';
+  return `${modelName}::${text}`;
+}
+
+function getEmbeddingCacheEntry(modelName = '', text = '') {
+  const key = getEmbeddingCacheKey(text, modelName);
+  if (!key) return null;
+  const cached = embeddingRequestCache.get(key);
+  return cached ? cached.slice() : null;
+}
+
+function setEmbeddingCacheEntry(modelName = '', text = '', vector = []) {
+  if (!modelName || !text || !Array.isArray(vector) || !vector.length) return;
+  const key = getEmbeddingCacheKey(text, modelName);
+  if (!key) return;
+
+  if (embeddingRequestCache.size >= EMBEDDING_CACHE_LIMIT) {
+    const oldestKey = embeddingRequestCache.keys().next().value;
+    if (oldestKey) {
+      embeddingRequestCache.delete(oldestKey);
+    }
+  }
+
+  embeddingRequestCache.set(key, vector.slice());
+}
+
+function clearEmbeddingCache() {
+  embeddingRequestCache.clear();
+}
+
+function buildHistoryEmbeddingText(record = {}) {
+  const parts = [];
+  const asDate = prepareEmbeddingField(record.AS접수일자 || record.asDate || '', EMBEDDING_FIELD_LIMIT_SHORT);
+  const plan = prepareEmbeddingField(record.조치계획 || record.plan || '');
+  const receipt = prepareEmbeddingField(record.접수내용 || record.rec || '');
+  const result = prepareEmbeddingField(record.조치결과 || record.res || '');
+
+  if (asDate) parts.push(`AS접수일자: ${asDate}`);
+  if (plan) parts.push(`조치계획: ${plan}`);
+  if (receipt) parts.push(`접수내용: ${receipt}`);
+  if (result) parts.push(`조치결과: ${result}`);
+
+  return parts.join('\n');
+}
+
+function cosineSimilarity(vecA = [], vecB = []) {
+  if (!Array.isArray(vecA) || !Array.isArray(vecB)) return -1;
+  if (vecA.length !== vecB.length || !vecA.length) return -1;
+
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < vecA.length; i++) {
+    const a = vecA[i];
+    const b = vecB[i];
+    dot += a * b;
+    normA += a * a;
+    normB += b * b;
+  }
+
+  if (normA === 0 || normB === 0) return -1;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function invalidateHistoryEmbeddingIndex() {
+  historyEmbeddingLoaded = false;
+  historyEmbeddingIndex = [];
+  historyEmbeddingMap.clear();
+  historyEmbeddingPromise = null;
+  clearEmbeddingCache();
+}
+
+async function loadHistoryEmbeddingIndex(force = false) {
+  if (historyEmbeddingLoaded && !force) return historyEmbeddingIndex;
+  if (!force && historyEmbeddingPromise) return historyEmbeddingPromise;
+
+  historyEmbeddingPromise = db.ref(aiHistoryPath).once('value')
+    .then(snapshot => {
+      const data = snapshot.val() || {};
+      const list = [];
+      historyEmbeddingMap.clear();
+
+      Object.entries(data).forEach(([project, records]) => {
+        if (!records) return;
+        Object.entries(records).forEach(([historyId, rec]) => {
+          if (!rec || typeof rec !== 'object') return;
+          const entry = {
+            project,
+            historyId,
+            asDate: rec.AS접수일자 || '',
+            조치계획: rec.조치계획 || '',
+            접수내용: rec.접수내용 || '',
+            조치결과: rec.조치결과 || '',
+            기술적종료일: rec.기술적종료일 || '',
+            embeddingModel: rec.embeddingModel || '',
+            embeddingString: rec.embedding || '',
+            timestamp: rec.timestamp || '',
+            text: buildHistoryEmbeddingText(rec)
+          };
+          entry.embedding = rec.embedding ? stringToEmbedding(rec.embedding) : [];
+          list.push(entry);
+          historyEmbeddingMap.set(`${project}/${historyId}`, entry);
+        });
+      });
+
+      historyEmbeddingIndex = list;
+      historyEmbeddingLoaded = true;
+      return list;
+    })
+    .catch(err => {
+      historyEmbeddingLoaded = false;
+      console.error('히스토리 임베딩 로드 오류:', err);
+      throw err;
+    })
+    .finally(() => {
+      historyEmbeddingPromise = null;
+    });
+
+  return historyEmbeddingPromise;
+}
+
+async function getAiEmbedding(text, specifiedModel = '') {
+  const content = (text || '').trim();
+  if (!content) return [];
+
+  const apiKey = (g_aiConfig.apiKey || '').trim();
+  if (!apiKey) {
+    console.warn('임베딩 생략: AI API Key가 설정되지 않았습니다.');
+    return [];
+  }
+
+  const modelName = (specifiedModel || getActiveEmbeddingModel() || '').trim();
+  if (!modelName) {
+    console.warn('임베딩 생략: 임베딩 모델이 설정되지 않았습니다.');
+    return [];
+  }
+
+  try {
+    const cached = getEmbeddingCacheEntry(modelName, content);
+    if (cached && cached.length) {
+      return cached;
+    }
+
+    let vector = [];
+    if (isGeminiEmbeddingModel(modelName)) {
+      vector = await callGeminiEmbedding(content, apiKey, modelName);
+    } else {
+      vector = await callOpenAiEmbedding(content, apiKey, modelName);
+    }
+
+    if (vector && vector.length) {
+      setEmbeddingCacheEntry(modelName, content, vector);
+      return vector.slice();
+    }
+
+    return [];
+  } catch (error) {
+    console.error('임베딩 생성 오류:', error);
+    return [];
+  }
+}
+
+async function callOpenAiEmbedding(text, apiKey, modelName) {
+  const response = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: modelName,
+      input: text
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data?.error?.message || JSON.stringify(data);
+    throw new Error(`OpenAI 임베딩 오류: ${message}`);
+  }
+
+  const vector = data?.data?.[0]?.embedding;
+  return Array.isArray(vector) ? vector : [];
+}
+
+async function callGeminiEmbedding(text, apiKey, modelName) {
+  const url = `https://generativelanguage.googleapis.com/v1/models/${modelName}:embedContent?key=${apiKey}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: {
+        parts: [
+          { text }
+        ]
+      }
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data?.error?.message || JSON.stringify(data);
+    throw new Error(`Gemini 임베딩 오류: ${message}`);
+  }
+
+  const vector = data?.embedding?.values || data?.embedding?.value;
+  return Array.isArray(vector) ? vector : [];
+}
+
+async function ensureHistoryRecordEmbedding(entry, embedModel) {
+  if (!entry) return [];
+
+  const modelName = (embedModel || getActiveEmbeddingModel() || '').trim();
+  if (!modelName) return [];
+
+  const text = entry.text || buildHistoryEmbeddingText(entry);
+  if (!text.trim()) return [];
+
+  const vector = await getAiEmbedding(text, modelName);
+  if (!vector.length) return [];
+
+  const embeddingString = embeddingToString(vector);
+  entry.embedding = vector;
+  entry.embeddingString = embeddingString;
+  entry.embeddingModel = modelName;
+
+  const updatePath = `${aiHistoryPath}/${entry.project}/${entry.historyId}`;
+  try {
+    await db.ref(updatePath).update({
+      embedding: embeddingString,
+      embeddingModel: modelName,
+      embeddingUpdatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('히스토리 임베딩 저장 오류:', error);
+  }
+
+  return vector;
+}
+
+async function runWithConcurrency(items = [], limit = 1, worker = async () => {}) {
+  if (!Array.isArray(items) || !items.length || typeof worker !== 'function') return;
+
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  let index = 0;
+
+  async function next() {
+    while (true) {
+      let currentIndex;
+      if (index >= items.length) return;
+      currentIndex = index++;
+
+      try {
+        await worker(items[currentIndex], currentIndex);
+      } catch (error) {
+        console.error('병렬 작업 처리 중 오류:', error);
+      }
+    }
+  }
+
+  const runners = Array.from({ length: concurrency }, () => next());
+  await Promise.all(runners);
+}
+
+async function attachEmbeddingsToHistoryBatch(batchRecords = {}) {
+  const entries = Object.entries(batchRecords);
+  if (!entries.length) return;
+
+  const apiKey = (g_aiConfig.apiKey || '').trim();
+  if (!apiKey) {
+    console.warn('임베딩 생략: AI API Key가 설정되지 않았습니다.');
+    return;
+  }
+
+  const embedModel = (getActiveEmbeddingModel() || '').trim();
+  if (!embedModel) {
+    console.warn('임베딩 생략: 임베딩 모델이 설정되지 않았습니다.');
+    return;
+  }
+
+  const textToRecords = new Map();
+
+  entries.forEach(([, record]) => {
+    if (!record || typeof record !== 'object') return;
+
+    const existingString = typeof record.embedding === 'string'
+      ? record.embedding
+      : (typeof record.embeddingString === 'string' ? record.embeddingString : '');
+
+    if (existingString) {
+      record.embedding = existingString;
+      record.embeddingString = existingString;
+      if (!record.embeddingModel) {
+        record.embeddingModel = embedModel;
+      }
+      if (!record.embeddingUpdatedAt) {
+        record.embeddingUpdatedAt = new Date().toISOString();
+      }
+      return;
+    }
+
+    const text = buildHistoryEmbeddingText(record);
+    if (!text.trim()) return;
+
+    if (!textToRecords.has(text)) {
+      textToRecords.set(text, []);
+    }
+    textToRecords.get(text).push(record);
+  });
+
+  const uniqueTexts = Array.from(textToRecords.keys());
+  if (!uniqueTexts.length) return;
+
+  const vectorsByText = new Map();
+
+  await runWithConcurrency(uniqueTexts, EMBEDDING_BATCH_CONCURRENCY, async text => {
+    let vector = getEmbeddingCacheEntry(embedModel, text);
+    if (!vector) {
+      vector = await getAiEmbedding(text, embedModel);
+    }
+
+    if (Array.isArray(vector) && vector.length) {
+      vectorsByText.set(text, vector.slice());
+      setEmbeddingCacheEntry(embedModel, text, vector);
+    }
+  });
+
+  const timestamp = new Date().toISOString();
+
+  textToRecords.forEach((records, text) => {
+    const vector = vectorsByText.get(text);
+    if (!vector || !vector.length) return;
+
+    const embeddingString = embeddingToString(vector);
+    records.forEach(record => {
+      record.embedding = embeddingString;
+      record.embeddingString = embeddingString;
+      record.embeddingModel = embedModel;
+      record.embeddingUpdatedAt = timestamp;
+    });
+  });
+}
+
+function formatSimilarityScore(score) {
+  if (!Number.isFinite(score)) return '0%';
+  return `${(score * 100).toFixed(1)}%`;
+}
+
+async function handleSimilarHistorySearch(row) {
+  if (!row) return;
+
+  if (similarSearchInProgress) {
+    alert('다른 유사 AS 검색이 진행 중입니다. 잠시 후 다시 시도해주세요.');
+    return;
+  }
+
+  const queryText = buildHistoryEmbeddingText(row);
+  if (!queryText.trim()) {
+    alert('접수내용 또는 조치결과가 없어 분석할 수 없습니다.');
+    return;
+  }
+
+  const apiKey = (g_aiConfig.apiKey || '').trim();
+  if (!apiKey) {
+    alert('AI API Key가 설정되어 있지 않습니다.');
+    return;
+  }
+
+  const embedModel = (getActiveEmbeddingModel() || '').trim();
+  if (!embedModel) {
+    alert('임베딩 모델이 설정되어 있지 않습니다.');
+    return;
+  }
+
+  similarSearchInProgress = true;
+  showAiProgressModal();
+  clearAiProgressText();
+  updateAiProgressText(`[유사 AS 검색] ${row.공번 || ''}\n`);
+
+  try {
+    updateAiProgressText('질의 임베딩 생성 중...\n');
+    const queryEmbedding = await getAiEmbedding(queryText, embedModel);
+    if (!queryEmbedding.length) {
+      alert('임베딩 생성에 실패했습니다. AI 설정을 확인해 주세요.');
+      return;
+    }
+
+    const index = await loadHistoryEmbeddingIndex();
+    if (!index.length) {
+      alert('AS 히스토리 데이터가 없습니다.');
+      return;
+    }
+
+    updateAiProgressText(`총 ${index.length}건의 히스토리를 비교합니다...\n`);
+    const results = await performSimilarHistorySearch(row, queryEmbedding, index, embedModel);
+    updateAiProgressText('검색 완료\n');
+
+    closeAiProgressModal();
+    openSimilarHistoryModal(row, results);
+  } catch (error) {
+    console.error('유사 AS 검색 오류:', error);
+    alert('유사 AS 검색 중 오류가 발생했습니다.');
+  } finally {
+    closeAiProgressModal();
+    similarSearchInProgress = false;
+  }
+}
+
+async function performSimilarHistorySearch(row, queryEmbedding, index, embedModel) {
+  const results = [];
+
+  for (let i = 0; i < index.length; i++) {
+    const entry = index[i];
+    if (!entry) continue;
+
+    if (!entry.text) {
+      entry.text = buildHistoryEmbeddingText(entry);
+    }
+
+    const sameProject = entry.project && row.공번 && entry.project === row.공번;
+    const sameDate = (entry.asDate || '') && row.AS접수일자 && (entry.asDate === row.AS접수일자);
+    const sameReceipt = (entry.접수내용 || '') === (row.접수내용 || '');
+    const sameResult = (entry.조치결과 || '') === (row.조치결과 || '');
+    if (sameProject && sameDate && sameReceipt && sameResult) {
+      continue;
+    }
+
+    let targetEmbedding = entry.embedding;
+    const needsRefresh = !targetEmbedding || !targetEmbedding.length || !entry.embeddingModel || entry.embeddingModel !== embedModel || targetEmbedding.length !== queryEmbedding.length;
+
+    if (needsRefresh) {
+      if (!entry.text.trim()) continue;
+      updateAiProgressText(`임베딩 갱신 중: ${entry.project || 'N/A'} (${i + 1}/${index.length})\n`);
+      targetEmbedding = await ensureHistoryRecordEmbedding(entry, embedModel);
+    }
+
+    if (!targetEmbedding || !targetEmbedding.length || targetEmbedding.length !== queryEmbedding.length) continue;
+
+    const score = cosineSimilarity(queryEmbedding, targetEmbedding);
+    if (!Number.isFinite(score)) continue;
+
+    results.push({
+      project: entry.project,
+      historyId: entry.historyId,
+      asDate: entry.asDate || '',
+      조치계획: entry.조치계획 || '',
+      접수내용: entry.접수내용 || '',
+      조치결과: entry.조치결과 || '',
+      기술적종료일: entry.기술적종료일 || '',
+      score
+    });
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, 20);
+}
+
+function openSimilarHistoryModal(row, results = []) {
+  const modal = document.getElementById('similarHistoryModal');
+  if (!modal) return;
+
+  const titleEl = modal.querySelector('h2');
+  if (titleEl) {
+    const titleText = translations[currentLanguage]["유사 AS 검색 결과"] || "유사 AS 검색 결과";
+    const projectText = row.공번 ? ` - ${row.공번}` : '';
+    titleEl.textContent = `${titleText}${projectText}`;
+  }
+
+  const summaryEl = document.getElementById('similarHistorySummary');
+  if (summaryEl) {
+    if (results.length) {
+      const label = translations[currentLanguage]["AS접수건수"] || 'AS접수건수';
+      summaryEl.textContent = `${label}: ${results.length}`;
+    } else {
+      summaryEl.textContent = translations[currentLanguage]["결과 없음"] || "결과 없음";
+    }
+  }
+
+  const queryInfoEl = document.getElementById('similarHistoryQuery');
+  if (queryInfoEl) {
+    const infoParts = [];
+    if (row.shipName) {
+      infoParts.push(`${translations[currentLanguage]["SHIPNAME"] || 'SHIPNAME'}: ${row.shipName}`);
+    }
+    if (row.shipowner) {
+      infoParts.push(`${translations[currentLanguage]["SHIPOWNER"] || 'SHIPOWNER'}: ${row.shipowner}`);
+    }
+    if (row.조치결과) {
+      infoParts.push(`${translations[currentLanguage]["조치결과"] || '조치결과'}: ${row.조치결과}`);
+    }
+    queryInfoEl.textContent = infoParts.join(' | ');
+  }
+
+  const listEl = document.getElementById('similarHistoryList');
+  if (listEl) {
+    listEl.innerHTML = '';
+
+    if (!results.length) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'similar-history-empty';
+      emptyDiv.textContent = translations[currentLanguage]["결과 없음"] || "결과 없음";
+      listEl.appendChild(emptyDiv);
+    } else {
+      results.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'similar-history-card';
+
+        const header = document.createElement('div');
+        header.className = 'similar-history-card-header';
+
+        const projectEl = document.createElement('div');
+        projectEl.className = 'similar-history-project';
+        projectEl.textContent = item.project || '-';
+
+        const scoreEl = document.createElement('div');
+        scoreEl.className = 'similar-history-score';
+        scoreEl.textContent = formatSimilarityScore(item.score);
+
+        header.appendChild(projectEl);
+        header.appendChild(scoreEl);
+
+        const body = document.createElement('div');
+        body.className = 'similar-history-card-body';
+
+        const addField = (labelKey, value) => {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'similar-history-field';
+
+          const labelEl = document.createElement('span');
+          labelEl.className = 'similar-history-label';
+          labelEl.textContent = translations[currentLanguage][labelKey] || labelKey;
+
+          const valueEl = document.createElement('p');
+          valueEl.className = 'similar-history-value';
+          valueEl.textContent = value || '-';
+
+          wrapper.appendChild(labelEl);
+          wrapper.appendChild(valueEl);
+          body.appendChild(wrapper);
+        };
+
+        addField('AS접수일자', item.asDate || '-');
+        addField('조치계획', item.조치계획 || '-');
+        addField('접수내용', item.접수내용 || '-');
+        addField('조치결과', item.조치결과 || '-');
+        if (item.기술적종료일) {
+          addField('기술적종료일', item.기술적종료일);
+        }
+
+        card.appendChild(header);
+        card.appendChild(body);
+        listEl.appendChild(card);
+      });
+    }
+  }
+
+  modal.style.display = 'block';
+  modal.style.zIndex = '10012';
+}
+
+function closeSimilarHistoryModal() {
+  const modal = document.getElementById('similarHistoryModal');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.remove('fullscreen');
+  }
+}
+
+function toggleSimilarHistoryFullscreen() {
+  const modal = document.getElementById('similarHistoryModal');
+  if (modal) {
+    modal.classList.toggle('fullscreen');
   }
 }
 
@@ -5487,7 +6407,7 @@ async function summarizeAllHistoryRecords(records, project) {
           
           if (record.id && record.id.startsWith('current_')) {
             const newHistoryId = getProjectHistoryRef(project).push().key;
-            await db.ref(`${aiHistoryPath}/${project}/${newHistoryId}`).set({
+            const historyRecord = {
               project: project,
               AS접수일자: record.asDate,
               조치계획: record.plan,
@@ -5496,7 +6416,11 @@ async function summarizeAllHistoryRecords(records, project) {
               기술적종료일: record.tEnd,
               aiSummary: summary,
               timestamp: new Date().toISOString()
-            });
+            };
+
+            await attachEmbeddingsToHistoryBatch({ [`${project}/${newHistoryId}`]: historyRecord });
+            await db.ref(`${aiHistoryPath}/${project}/${newHistoryId}`).set(historyRecord);
+            invalidateHistoryEmbeddingIndex();
 
             record.id = newHistoryId;
           } else {
@@ -5570,7 +6494,7 @@ async function summarizeHistoryRecord(record, recordIndex) {
     const project = record.project || '';
     if (record.id && record.id.startsWith('current_')) {
       const newHistoryId = getProjectHistoryRef(project).push().key;
-      await db.ref(`${aiHistoryPath}/${project}/${newHistoryId}`).set({
+      const historyRecord = {
         project: project,
         AS접수일자: record.asDate,
         조치계획: record.plan,
@@ -5579,7 +6503,11 @@ async function summarizeHistoryRecord(record, recordIndex) {
         기술적종료일: record.tEnd,
         aiSummary: summary,
         timestamp: new Date().toISOString()
-      });
+      };
+
+      await attachEmbeddingsToHistoryBatch({ [`${project}/${newHistoryId}`]: historyRecord });
+      await db.ref(`${aiHistoryPath}/${project}/${newHistoryId}`).set(historyRecord);
+      invalidateHistoryEmbeddingIndex();
 
       record.id = newHistoryId;
     } else if (record.id) {
