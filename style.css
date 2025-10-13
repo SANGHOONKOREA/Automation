@@ -3416,18 +3416,36 @@ img, video {
   vertical-align: top;
 }
 
-/* IMO 필드 아이콘 스타일 */
+/* IMO 필드 배치 및 아이콘 스타일 */
+td[data-field="imo"] {
+  white-space: nowrap;
+}
+
+td[data-field="imo"] .imo-cell-wrapper {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+td[data-field="imo"] .imo-cell-wrapper .imo-input-field {
+  width: auto;
+  flex: 0 1 120px;
+  min-width: 110px;
+  max-width: 130px;
+}
+
+td[data-field="imo"] .imo-cell-wrapper .imo-input-field::placeholder {
+  color: #adb5bd;
+}
+
 td[data-field="imo"] .imo-action-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 4px;
+  cursor: pointer;
   font-size: 1.05em;
   transition: transform 0.2s ease, filter 0.2s ease;
-}
-
-td[data-field="imo"] .imo-action-icon:first-of-type {
-  margin-left: 6px;
 }
 
 td[data-field="imo"] .imo-action-icon:hover {

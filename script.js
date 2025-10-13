@@ -3177,53 +3177,34 @@ function createDataCell(row, field) {
     sel.addEventListener('change', onCellChange);
     td.appendChild(sel);
   } else if (field === 'imo') {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'imo-cell-wrapper';
+
     const inp = document.createElement('input');
     inp.type = 'text';
     inp.value = value;
-    inp.style.width = '55%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
+    inp.classList.add('imo-input-field');
     inp.addEventListener('change', onCellChange);
-    td.appendChild(inp);
+    wrapper.appendChild(inp);
 
-    const linkIcon = document.createElement('span');
-    linkIcon.textContent = '🔎';
-    linkIcon.style.cursor = 'pointer';
-    linkIcon.title = '새 창에서 조회';
-    linkIcon.classList.add('imo-action-icon');
-    linkIcon.addEventListener('click', () => {
-      const imoVal = inp.value.trim();
-      if (imoVal) {
-        window.open('https://www.vesselfinder.com/vessels/details/' + encodeURIComponent(imoVal), '_blank');
-      }
-    });
-    td.appendChild(linkIcon);
+    const actions = [
+      { icon: '🔎', title: '새 창에서 조회', action: 'open-imo-search' },
+      { icon: '📁', title: '도면 경로 복사', action: 'copy-plan-path' },
+      { icon: '💾', title: '백업 경로 복사', action: 'copy-backup-path' }
+    ];
 
-    const drawingIcon = document.createElement('span');
-    drawingIcon.textContent = '📁';
-    drawingIcon.style.cursor = 'pointer';
-    drawingIcon.title = '도면 경로 복사';
-    drawingIcon.classList.add('imo-action-icon');
-    drawingIcon.addEventListener('click', () => {
-      const imoVal = inp.value.trim();
-      if (imoVal) {
-        openPdfDrawing(imoVal);
-      }
+    actions.forEach(({ icon, title, action }) => {
+      const span = document.createElement('span');
+      span.textContent = icon;
+      span.title = title;
+      span.classList.add('imo-action-icon');
+      span.dataset.action = action;
+      wrapper.appendChild(span);
     });
-    td.appendChild(drawingIcon);
 
-    const backupIcon = document.createElement('span');
-    backupIcon.textContent = '💾';
-    backupIcon.style.cursor = 'pointer';
-    backupIcon.title = '백업 경로 복사';
-    backupIcon.classList.add('imo-action-icon');
-    backupIcon.addEventListener('click', () => {
-      const imoVal = inp.value.trim();
-      if (imoVal) {
-        openBackupSoftwarePath(imoVal);
-      }
-    });
-    td.appendChild(backupIcon);
+    td.appendChild(wrapper);
   } else if (['조치계획', '접수내용', '조치결과'].includes(field)) {
     const inp = document.createElement('input');
     inp.type = 'text';
@@ -3319,6 +3300,56 @@ function buildImoFolderPath(basePath, imoNo) {
 function sanitizeBasePathValue(pathValue) {
   if (!pathValue) return '';
   return pathValue.replace(/[\\/]+$/, '');
+}
+
+const imoActionHandlers = {
+  'open-imo-search': ({ imo }) => {
+    window.open('https://www.vesselfinder.com/vessels/details/' + encodeURIComponent(imo), '_blank');
+  },
+  'copy-plan-path': ({ imo }) => {
+    openPdfDrawing(imo);
+  },
+  'copy-backup-path': ({ imo }) => {
+    openBackupSoftwarePath(imo);
+  }
+};
+
+document.addEventListener('click', (event) => {
+  const actionEl = event.target.closest('[data-action]');
+  if (!actionEl) return;
+
+  const action = actionEl.dataset.action;
+  if (!action || !(action in imoActionHandlers)) return;
+
+  const imoValue = resolveImoValueFromElement(actionEl);
+  if (!imoValue) {
+    if (action === 'open-imo-search') {
+      return;
+    }
+    alert('IMO 번호가 없습니다. IMO 번호를 먼저 입력해주세요.');
+    return;
+  }
+
+  imoActionHandlers[action]({
+    imo: imoValue,
+    element: actionEl,
+    event
+  });
+});
+
+function resolveImoValueFromElement(element) {
+  if (!element) return '';
+
+  const datasetValue = (element.dataset.imo || '').trim();
+  if (datasetValue) {
+    return datasetValue;
+  }
+
+  const cell = element.closest('td[data-field="imo"]');
+  if (!cell) return '';
+
+  const input = cell.querySelector('input[data-field="imo"]');
+  return input ? input.value.trim() : '';
 }
 
 function showPathCopyModal({ folderPath, basePath, type, copied }) {
