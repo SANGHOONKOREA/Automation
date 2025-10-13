@@ -1214,7 +1214,11 @@ td button[style*="background:#007bff"]:hover {
 /* 테이블 셀 최소폭 설정 - 기본/확장 뷰에 따른 조정 */
 th[data-field="공번"], td[data-field="공번"] { min-width: 120px; }
 th[data-field="시스템"], td[data-field="시스템"] { min-width: 80px; }
-th[data-field="imo"], td[data-field="imo"] { min-width: 120px; }
+th[data-field="imo"], td[data-field="imo"] {
+  min-width: 200px;
+  max-width: 220px;
+}
+td[data-field="imo"] { white-space: nowrap; }
 th[data-field="api_name"], td[data-field="api_name"] { min-width: 140px; }
 th[data-field="api_owner"], td[data-field="api_owner"] { min-width: 160px; }
 th[data-field="api_manager"], td[data-field="api_manager"] { min-width: 160px; }
@@ -1406,7 +1410,8 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
 #aiProgressModal,
 #apiProgressModal,
 #excelModal,
-#managerStatusModal {
+#managerStatusModal,
+#pathConfigModal {
   display: none; 
   position: fixed; 
   z-index: var(--z-modal-bg); 
@@ -1419,14 +1424,21 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
 }
 
 .modal-content {
-  background: #fff; 
-  margin: 5% auto; 
+  background: #fff;
+  margin: 5% auto;
   border-radius: 12px;
-  position: relative; 
+  position: relative;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   animation: modalSlideIn 0.4s ease-out;
   max-height: 90vh;
   overflow-y: auto;
+}
+
+.modal-description {
+  font-size: 0.9em;
+  color: #495057;
+  line-height: 1.5;
+  margin-bottom: 20px;
 }
 
 @keyframes modalSlideIn {
@@ -2013,6 +2025,10 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
   z-index: 10016 !important;
   box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5) !important;
   border: 2px solid #007bff !important;
+}
+
+#pathConfigModal .modal-content {
+  max-width: 480px;
 }
 
 #aiProgressModal h2,
@@ -3401,34 +3417,49 @@ img, video {
 }
 
 /* IMO 필드 아이콘 스타일 */
-td[data-field="imo"] span {
-  display: inline-block;
+td[data-field="imo"] .imo-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin-left: 4px;
-  font-size: 1.1em;
-  transition: all 0.2s ease;
+  font-size: 1.05em;
+  transition: transform 0.2s ease, filter 0.2s ease;
 }
 
-td[data-field="imo"] span:hover {
-  transform: scale(1.2);
+td[data-field="imo"] .imo-action-icon:first-of-type {
+  margin-left: 6px;
+}
+
+td[data-field="imo"] .imo-action-icon:hover {
+  transform: scale(1.15);
   filter: brightness(1.2);
 }
 
-td[data-field="imo"] span[title="PDF 도면 열기"] {
+td[data-field="imo"] .imo-action-icon[title="새 창에서 조회"] {
+  color: #0d6efd;
+}
+
+td[data-field="imo"] .imo-action-icon[title="새 창에서 조회"]:hover {
+  color: #0a58ca;
+  text-shadow: 0 0 4px rgba(13, 110, 253, 0.45);
+}
+
+td[data-field="imo"] .imo-action-icon[title="도면 경로 복사"] {
   color: #dc3545;
 }
 
-td[data-field="imo"] span[title="PDF 도면 열기"]:hover {
-  color: #c82333;
-  text-shadow: 0 0 4px rgba(220, 53, 69, 0.5);
+td[data-field="imo"] .imo-action-icon[title="도면 경로 복사"]:hover {
+  color: #bb2d3b;
+  text-shadow: 0 0 4px rgba(220, 53, 69, 0.4);
 }
 
-td[data-field="imo"] span[title="새 창에서 조회"] {
-  color: #007bff;
+td[data-field="imo"] .imo-action-icon[title="백업 경로 복사"] {
+  color: #198754;
 }
 
-td[data-field="imo"] span[title="새 창에서 조회"]:hover {
-  color: #0056b3;
-  text-shadow: 0 0 4px rgba(0, 123, 255, 0.5);
+td[data-field="imo"] .imo-action-icon[title="백업 경로 복사"]:hover {
+  color: #157347;
+  text-shadow: 0 0 4px rgba(25, 135, 84, 0.35);
 }
 
 /* 특별한 버튼 색상 - 더 명확한 구분 */

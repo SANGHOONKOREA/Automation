@@ -71,6 +71,7 @@ function getProjectHistoryRef(project) {
 }
 const aiConfigPath = "as-service/admin/aiConfig";
 const apiConfigPath = "as-service/admin/apiConfig";
+const pathConfigPath = "as-service/admin/pathConfig";
 const userMetaPath = 'as-service/user_meta';
 const adminPasswordPath = 'as-service/admin/password';
 const legacyUsersPath = 'users';
@@ -171,6 +172,11 @@ let g_aiConfig = {
   promptOwner: ""
 };
 
+let g_pathConfig = {
+  drawingPath: "",
+  backupPath: ""
+};
+
 // 히스토리 임베딩 인덱스 캐시
 let historyEmbeddingIndex = [];
 const historyEmbeddingMap = new Map();
@@ -240,6 +246,9 @@ const translations = {
     "담당자": "담당자",
     "선주사": "선주사",
     "사용자 관리": "사용자 관리",
+    "도면/백업 경로 관리": "도면/백업 경로 관리",
+    "도면 기본 경로": "도면 기본 경로",
+    "백업 SW 기본 경로": "백업 SW 기본 경로",
     "AI 설정 관리": "AI 설정 관리",
     "API 설정 관리": "API 설정 관리",
     "연결됨": "연결됨",
@@ -337,6 +346,9 @@ const translations = {
     "담당자": "Manager",
     "선주사": "Owner",
     "사용자 관리": "User Management",
+    "도면/백업 경로 관리": "Drawing/Backup Path Management",
+    "도면 기본 경로": "Drawing Base Path",
+    "백업 SW 기본 경로": "Backup SW Base Path",
     "AI 설정 관리": "AI Configuration",
     "API 설정 관리": "API Configuration",
     "연결됨": "Connected",
@@ -437,6 +449,9 @@ const translations = {
     "담당자": "负责人",
     "선주사": "船东",
     "사용자 관리": "用户管理",
+    "도면/백업 경로 관리": "图纸/备份路径管理",
+    "도면 기본 경로": "图纸基础路径",
+    "백업 SW 기본 경로": "备份软件基础路径",
     "AI 설정 관리": "AI设置管理",
     "API 설정 관리": "API设置管理",
     "연결됨": "已连接",
@@ -536,6 +551,9 @@ const translations = {
     "담당자": "担当者",
     "선주사": "船主",
     "사용자 관리": "ユーザー管理",
+    "도면/백업 경로 관리": "図面/バックアップパス管理",
+    "도면 기본 경로": "図面基本パス",
+    "백업 SW 기본 경로": "バックアップSW基本パス",
     "AI 설정 관리": "AI設定管理",
     "API 설정 관리": "API設定管理",
     "연결됨": "接続済み",
@@ -637,6 +655,7 @@ function registerEventListeners() {
   
   // 사용자 관리 관련
   document.getElementById('userManageBtn').addEventListener('click', () => checkAdminPassword(openUserModal));
+  document.getElementById('pathConfigBtn').addEventListener('click', () => checkAdminPassword(openPathConfigModal));
   document.getElementById('addUserConfirmBtn').addEventListener('click', addNewUser);
   document.getElementById('deleteSelectedUsersBtn').addEventListener('click', deleteSelectedUsers);
   
@@ -649,7 +668,14 @@ function registerEventListeners() {
   document.getElementById('apiConfigBtn').addEventListener('click', () => checkAdminPassword(openApiConfigModal));
   document.getElementById('saveApiConfigBtn').addEventListener('click', saveApiConfig);
   document.getElementById('apiRefreshAllBtn').addEventListener('click', () => checkAdminPassword(refreshAllVessels));
-  
+  document.getElementById('savePathConfigBtn').addEventListener('click', savePathConfig);
+  document.getElementById('pathConfigCancelBtn').addEventListener('click', closePathConfigModal);
+  document.getElementById('pathConfigModal').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      closePathConfigModal();
+    }
+  });
+
   // 테이블 관련
   document.getElementById('asTable').addEventListener('click', handleTableClick);
   document.getElementById('selectAll').addEventListener('change', toggleSelectAll);
@@ -1401,19 +1427,39 @@ function updateUILanguage() {
     'btnManager': '담당자',
     'btnOwner': '선주사',
     'userManageBtn': '사용자 관리',
+    'pathConfigBtn': '도면/백업 경로 관리',
+    'savePathConfigBtn': '저장',
     'aiConfigBtn': 'AI 설정 관리',
     'apiConfigBtn': 'API 설정 관리'
   };
   
   document.querySelectorAll('button').forEach(btn => {
     if (btn.classList.contains('lang-btn')) return;
-    
+
     if (btn.id && buttonMappings[btn.id]) {
       const koKey = buttonMappings[btn.id];
       btn.textContent = langData[koKey] || koKey;
     }
   });
-  
+
+  const pathConfigModal = document.getElementById('pathConfigModal');
+  if (pathConfigModal) {
+    const titleEl = pathConfigModal.querySelector('h2');
+    if (titleEl) {
+      titleEl.textContent = langData['도면/백업 경로 관리'] || '도면/백업 경로 관리';
+    }
+
+    const drawingLabel = pathConfigModal.querySelector('label[for="drawingPathInput"]');
+    if (drawingLabel) {
+      drawingLabel.textContent = langData['도면 기본 경로'] || '도면 기본 경로';
+    }
+
+    const backupLabel = pathConfigModal.querySelector('label[for="backupPathInput"]');
+    if (backupLabel) {
+      backupLabel.textContent = langData['백업 SW 기본 경로'] || '백업 SW 기본 경로';
+    }
+  }
+
   // 사이드바 제목
   const listTitle = document.getElementById('listTitle');
   if (listTitle) {
@@ -1557,6 +1603,7 @@ function showMainInterface() {
     loadData();
     loadAiConfig();
     loadApiConfig();
+    loadPathConfig();
     dataLoaded = true;
   }
 }
@@ -2073,6 +2120,65 @@ async function loadAiConfig() {
       promptOwner: '',
       ...snap.val()
     };
+  }
+}
+
+/** ==================================
+ *  도면/백업 경로 관리
+ * ===================================*/
+function openPathConfigModal() {
+  document.getElementById('drawingPathInput').value = g_pathConfig.drawingPath || '';
+  document.getElementById('backupPathInput').value = g_pathConfig.backupPath || '';
+  document.getElementById('pathConfigModal').style.display = 'block';
+}
+
+function closePathConfigModal() {
+  document.getElementById('pathConfigModal').style.display = 'none';
+}
+
+async function savePathConfig() {
+  const drawingInput = document.getElementById('drawingPathInput');
+  const backupInput = document.getElementById('backupPathInput');
+
+  const drawingPath = sanitizeBasePathValue((drawingInput?.value || '').trim());
+  const backupPath = sanitizeBasePathValue((backupInput?.value || '').trim());
+
+  const payload = {
+    drawingPath,
+    backupPath,
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    await db.ref(pathConfigPath).set(payload);
+    g_pathConfig = {
+      drawingPath,
+      backupPath
+    };
+
+    alert('경로 설정이 저장되었습니다.');
+    closePathConfigModal();
+  } catch (error) {
+    console.error('경로 설정 저장 오류:', error);
+    alert('경로 설정 저장 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+  }
+}
+
+async function loadPathConfig() {
+  try {
+    const snap = await db.ref(pathConfigPath).once('value');
+    if (snap.exists()) {
+      const value = snap.val() || {};
+      g_pathConfig = {
+        drawingPath: sanitizeBasePathValue((value.drawingPath || '').trim()),
+        backupPath: sanitizeBasePathValue((value.backupPath || '').trim())
+      };
+    } else {
+      g_pathConfig = { drawingPath: '', backupPath: '' };
+    }
+  } catch (error) {
+    console.error('경로 설정 로드 오류:', error);
+    g_pathConfig = { drawingPath: '', backupPath: '' };
   }
 }
 
@@ -3074,16 +3180,17 @@ function createDataCell(row, field) {
     const inp = document.createElement('input');
     inp.type = 'text';
     inp.value = value;
-    inp.style.width = '60%';
+    inp.style.width = '55%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
     inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
 
     const linkIcon = document.createElement('span');
-    linkIcon.textContent = ' 🔎';
+    linkIcon.textContent = '🔎';
     linkIcon.style.cursor = 'pointer';
     linkIcon.title = '새 창에서 조회';
+    linkIcon.classList.add('imo-action-icon');
     linkIcon.addEventListener('click', () => {
       const imoVal = inp.value.trim();
       if (imoVal) {
@@ -3092,18 +3199,31 @@ function createDataCell(row, field) {
     });
     td.appendChild(linkIcon);
 
-    const pdfIcon = document.createElement('span');
-    pdfIcon.textContent = ' 📄';
-    pdfIcon.style.cursor = 'pointer';
-    pdfIcon.title = 'PDF 도면 열기';
-    pdfIcon.style.marginLeft = '5px';
-    pdfIcon.addEventListener('click', () => {
+    const drawingIcon = document.createElement('span');
+    drawingIcon.textContent = '📁';
+    drawingIcon.style.cursor = 'pointer';
+    drawingIcon.title = '도면 경로 복사';
+    drawingIcon.classList.add('imo-action-icon');
+    drawingIcon.addEventListener('click', () => {
       const imoVal = inp.value.trim();
       if (imoVal) {
         openPdfDrawing(imoVal);
       }
     });
-    td.appendChild(pdfIcon);
+    td.appendChild(drawingIcon);
+
+    const backupIcon = document.createElement('span');
+    backupIcon.textContent = '💾';
+    backupIcon.style.cursor = 'pointer';
+    backupIcon.title = '백업 경로 복사';
+    backupIcon.classList.add('imo-action-icon');
+    backupIcon.addEventListener('click', () => {
+      const imoVal = inp.value.trim();
+      if (imoVal) {
+        openBackupSoftwarePath(imoVal);
+      }
+    });
+    td.appendChild(backupIcon);
   } else if (['조치계획', '접수내용', '조치결과'].includes(field)) {
     const inp = document.createElement('input');
     inp.type = 'text';
@@ -3156,138 +3276,139 @@ function createDataCell(row, field) {
 }
 
 /** ==================================
- *  PDF 파일 열기 기능 - 파일 탐색기에서 열기
+ *  도면/백업 경로 복사 기능
  * ===================================*/
 function openPdfDrawing(imoNo) {
+  copyImoFolderPath('drawing', imoNo);
+}
+
+function openBackupSoftwarePath(imoNo) {
+  copyImoFolderPath('backup', imoNo);
+}
+
+async function copyImoFolderPath(type, imoNo) {
   if (!imoNo) {
     alert('IMO 번호가 없습니다.');
     return;
   }
-  
-  // 서버 경로 설정
-  const serverPath = '\\\\10.101.10.20\\32.고객관리\\CS_박용\\9.개인폴더\\이제창\\FINAL DRAWING';
-  const fileName = `${imoNo}.pdf`;
-  const fullPath = `${serverPath}\\${fileName}`;
-  
-  // 바로 파일 탐색기로 폴더 열기 시도
-  openFolderInExplorer();
-  
-function openFolderInExplorer() {
-  try {
-    // 폴더 경로와 파일명을 함께 복사 (전체 경로)
-    copyToClipboard(fullPath);
-    
-    // 파일명도 별도로 저장
-    sessionStorage.setItem('pdfFileName', fileName);
-    
-    // 안내 모달 표시
-    showExplorerInstructions(serverPath, fileName, fullPath);
-    
-  } catch (e) {
-    console.error('폴더 열기 실패:', e);
-    // 실패 시에도 전체 경로 복사
-    copyToClipboard(fullPath);
-    showDetailedInstructions(fullPath);
+
+  const basePath = type === 'drawing' ? g_pathConfig.drawingPath : g_pathConfig.backupPath;
+  if (!basePath) {
+    const message = type === 'drawing'
+      ? '도면 기본 경로가 설정되어 있지 않습니다. 관리자에게 경로 설정을 요청해주세요.'
+      : '백업 SW 기본 경로가 설정되어 있지 않습니다. 관리자에게 경로 설정을 요청해주세요.';
+    alert(message);
+    return;
   }
+
+  const folderPath = buildImoFolderPath(basePath, imoNo);
+  const copied = await copyToClipboard(folderPath);
+  showPathCopyModal({
+    folderPath,
+    basePath,
+    type,
+    copied
+  });
 }
-  
-  // 파일 탐색기 안내 모달
-function showExplorerInstructions(folderPath, fileName, fullPath) {
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.7);
-      z-index: 10000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(4px);
-    `;
-    
-    const content = document.createElement('div');
-    content.style.cssText = `
-      background: white;
-      padding: 35px;
-      border-radius: 12px;
-      max-width: 600px;
-      box-shadow: 0 15px 50px rgba(0, 0, 0, 0.4);
-      animation: modalSlideIn 0.3s ease-out;
-    `;
-    
-    
-    const confirmBtn = document.createElement('button');
-    confirmBtn.textContent = '확인';
-    confirmBtn.style.cssText = `
-      background: #007bff;
-      color: white;
-      border: none;
-      padding: 10px 30px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.9em;
-      font-weight: 600;
-      transition: all 0.3s ease;
-    `;
-    confirmBtn.onclick = function() {
-      modal.remove();
-    };
-    
-    content.innerHTML = `
-      <h3 style="margin-top:0; color:#28a745; font-size:1.5em;">📁 파일 탐색기에서 PDF 파일 열기</h3>
-      
-      <div style="background:#f0f8ff; padding:20px; border-radius:8px; margin:20px 0; border-left:4px solid #007bff;">
-<p style="font-size:1.1em; margin:0 0 15px 0; font-weight:600;">
-  전체 파일 경로가 클립보드에 복사되었습니다!
-        </p>
-        <p style="margin:0; line-height:1.8;">
-          1. <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">Win</kbd> + 
-             <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">E</kbd> 키를 눌러 파일 탐색기를 엽니다<br>
-          2. 주소창을 클릭하고 <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">Ctrl</kbd> + 
-             <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">V</kbd>로 붙여넣기<br>
-          3. <kbd style="background:#e0e0e0; padding:3px 8px; border-radius:3px; font-size:0.9em;">Enter</kbd> 키를 누릅니다<br>
-4. 붙여넣기한 파일을 바로 열 수 있습니다
-        </p>
-      </div>
-      
-      <div style="background:#f8f9fa; padding:15px; border-radius:6px; margin-bottom:20px;">
-        <p style="margin:0; font-size:0.9em; color:#666;">
-          <strong>폴더 경로:</strong><br>
-          <code style="background:#fff; padding:8px; display:block; margin-top:5px; border:1px solid #ddd; border-radius:4px; font-size:0.85em; word-break:break-all;">
-            ${folderPath}
-          </code>
-        </p>
-      </div>
-      
-      <div style="display:flex; gap:10px; justify-content:center;">
-      </div>
-    `;
-    
-const buttonContainer = content.querySelector('div:last-child');
-buttonContainer.appendChild(confirmBtn);
-    
-    modal.appendChild(content);
-    document.body.appendChild(modal);
-    
-    // 모달 외부 클릭으로 닫기
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
-        modal.remove();
+
+function buildImoFolderPath(basePath, imoNo) {
+  const sanitizedBase = sanitizeBasePathValue(basePath);
+  return `${sanitizedBase}\\${imoNo}`;
+}
+
+function sanitizeBasePathValue(pathValue) {
+  if (!pathValue) return '';
+  return pathValue.replace(/[\\/]+$/, '');
+}
+
+function showPathCopyModal({ folderPath, basePath, type, copied }) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-background';
+  modal.style.zIndex = '10020';
+  modal.style.display = 'flex';
+  modal.style.alignItems = 'center';
+  modal.style.justifyContent = 'center';
+  modal.style.backgroundColor = 'rgba(0, 0, 0, 0.4)';
+  modal.style.padding = '20px';
+
+  const content = document.createElement('div');
+  content.className = 'modal-content';
+  content.style.maxWidth = '520px';
+
+  const title = type === 'drawing' ? '도면 경로 복사' : '백업 경로 복사';
+  const icon = type === 'drawing' ? '📁' : '💾';
+  const statusText = copied
+    ? '폴더 경로가 자동으로 복사되었습니다. 아래 안내에 따라 붙여넣기 하면 파일 탐색기에서 바로 이동할 수 있습니다.'
+    : '클립보드 복사에 실패했습니다. 아래 경로를 직접 복사하여 파일 탐색기에서 붙여넣기 해주세요.';
+
+  const instructionText = copied
+    ? `<ol style="margin:0; padding-left:18px; line-height:1.7; color:#24292f; font-size:0.95em;">
+        <li>Windows 탐색기를 열거나 <strong>Win + E</strong> 키를 눌러 탐색기를 실행합니다.</li>
+        <li>주소 표시줄을 클릭한 뒤 <strong>Ctrl + V</strong> 키로 붙여넣기 합니다.</li>
+        <li><strong>Enter</strong> 키를 눌러 해당 IMO 폴더로 이동합니다.</li>
+      </ol>`
+    : `<p style="margin:0; line-height:1.6; color:#24292f; font-size:0.95em;">경로를 드래그하여 복사한 뒤, 파일 탐색기의 주소 표시줄에 붙여넣고 Enter 키를 눌러 이동하세요.</p>`;
+
+  content.innerHTML = `
+    <h3 style="margin-top:0; font-size:1.4em; color:#1f6feb;">${icon} ${title}</h3>
+    <p style="margin-bottom:15px; line-height:1.6;">${statusText}</p>
+    <div style="background:#f6f8fa; border-radius:8px; padding:15px; margin-bottom:15px;">
+      <p style="margin:0; font-size:0.9em; color:#57606a;">기본 경로</p>
+      <code style="display:block; margin-top:6px; padding:8px; background:#fff; border:1px solid #d0d7de; border-radius:6px; word-break:break-all;">${basePath}</code>
+    </div>
+    <div style="background:#f6f8fa; border-radius:8px; padding:15px;">
+      <p style="margin:0; font-size:0.9em; color:#57606a;">IMO 하위 폴더 경로</p>
+      <code style="display:block; margin-top:6px; padding:8px; background:#fff; border:1px solid #d0d7de; border-radius:6px; word-break:break-all;">${folderPath}</code>
+    </div>
+    <div style="margin-top:18px; background:#fff8dc; border:1px solid #f1c21b; border-radius:8px; padding:14px;">${instructionText}</div>
+  `;
+
+  const buttonWrapper = document.createElement('div');
+  buttonWrapper.style.cssText = 'display:flex; justify-content:flex-end; gap:10px; margin-top:20px;';
+
+  if (!copied) {
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '경로 복사';
+    copyBtn.style.cssText = 'background:#1f883d; color:#fff; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;';
+    copyBtn.addEventListener('click', async () => {
+      const success = await copyToClipboard(folderPath);
+      if (success) {
+        alert('경로가 복사되었습니다. 파일 탐색기에 붙여넣기하세요.');
+      } else {
+        alert('복사에 실패했습니다. 경로를 직접 선택하여 복사해주세요.');
       }
     });
-    
-    // ESC 키로 닫기
-    const escHandler = (e) => {
-      if (e.key === 'Escape') {
-        modal.remove();
-        document.removeEventListener('keydown', escHandler);
-      }
-    };
-    document.addEventListener('keydown', escHandler);
+    buttonWrapper.appendChild(copyBtn);
   }
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '닫기';
+  closeBtn.style.cssText = 'background:#6c757d; color:#fff; border:none; padding:10px 20px; border-radius:6px; cursor:pointer;';
+  buttonWrapper.appendChild(closeBtn);
+
+  content.appendChild(buttonWrapper);
+  modal.appendChild(content);
+  document.body.appendChild(modal);
+
+  const closeModal = () => {
+    modal.remove();
+    document.removeEventListener('keydown', escHandler);
+  };
+
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      closeModal();
+    }
+  };
+  document.addEventListener('keydown', escHandler);
+
+  closeBtn.addEventListener('click', closeModal);
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      closeModal();
+    }
+  });
 }
 
 // 클립보드 복사 함수
