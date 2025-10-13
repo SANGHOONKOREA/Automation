@@ -3180,7 +3180,7 @@ function createDataCell(row, field) {
     const inp = document.createElement('input');
     inp.type = 'text';
     inp.value = value;
-    inp.style.width = '70%';
+    inp.style.width = '55%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
     inp.addEventListener('change', onCellChange);
