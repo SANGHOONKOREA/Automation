@@ -311,6 +311,26 @@ async function verifyEmailRegistration(email, existingUid = null) {
       return { registered: true, uid: null };
     }
 
+    const providerLists = [
+      Array.isArray(data?.allProviders) ? data.allProviders : null,
+      Array.isArray(data?.signinMethods) ? data.signinMethods : null,
+      Array.isArray(data?.signInMethods) ? data.signInMethods : null,
+      Array.isArray(data?.signInProviderIds) ? data.signInProviderIds : null,
+      Array.isArray(data?.existingProviderIds) ? data.existingProviderIds : null
+    ].filter(Boolean);
+
+    for (const providers of providerLists) {
+      if (providers.length > 0) {
+        return { registered: true, uid: null };
+      }
+    }
+
+    if (Array.isArray(data?.users) && data.users.length > 0) {
+      const firstUser = data.users.find((user) => normalizeEmail(user?.email) === normalized) || data.users[0];
+      const resolvedUid = firstUser?.localId || firstUser?.uid || null;
+      return { registered: true, uid: resolvedUid || null };
+    }
+
     if (data?.error) {
       console.warn('Firebase createAuthUri 오류:', data.error);
     }
