@@ -139,6 +139,47 @@ async function findUidByEmail(email) {
   return null;
 }
 
+async function requestAuthUriStatus(email) {
+  const identifier = (email || '').trim();
+  if (!identifier) {
+    return { registered: false };
+  }
+
+  const continueUri = `https://${firebaseConfig.authDomain}`;
+  const endpoint = `https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        identifier,
+        continueUri
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`createAuthUri 실패: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    const payload = await response.json();
+    const methods = Array.isArray(payload.signinMethods) ? payload.signinMethods : [];
+    const providers = Array.isArray(payload.allProviders) ? payload.allProviders : [];
+
+    return {
+      registered: Boolean(payload.registered),
+      methods: methods.length ? methods : providers,
+      raw: payload
+    };
+  } catch (error) {
+    console.error('createAuthUri 호출 오류:', { email: identifier, error });
+    return { registered: false, error };
+  }
+}
+
 async function isEmailRegisteredInAuth(email) {
   const normalizedEmail = (email || '').trim();
   if (!normalizedEmail) {
@@ -156,7 +197,7 @@ async function isEmailRegisteredInAuth(email) {
     try {
       const methods = await auth.fetchSignInMethodsForEmail(candidate);
       const normalizedMethods = Array.isArray(methods) ? methods : [];
-      checkedEmails.push({ email: candidate, methods: normalizedMethods });
+      checkedEmails.push({ email: candidate, methods: normalizedMethods, source: 'client' });
 
       if (normalizedMethods.length > 0) {
         return {
@@ -179,6 +220,30 @@ async function isEmailRegisteredInAuth(email) {
       }
 
       throw error;
+    }
+  }
+
+  for (const candidate of candidates) {
+    const restResult = await requestAuthUriStatus(candidate);
+    checkedEmails.push({
+      email: candidate,
+      methods: Array.isArray(restResult.methods) ? restResult.methods : [],
+      source: 'rest',
+      registered: restResult.registered
+    });
+
+    if (restResult.registered) {
+      return {
+        exists: true,
+        methods: Array.isArray(restResult.methods) ? restResult.methods : [],
+        matchedEmail: candidate,
+        via: 'rest',
+        checkedEmails
+      };
+    }
+
+    if (restResult.error) {
+      lastError = lastError || restResult.error;
     }
   }
 
