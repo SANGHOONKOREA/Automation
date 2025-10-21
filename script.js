@@ -107,43 +107,102 @@ async function fetchUserDirectory() {
 }
 
 async function findUidByEmail(email) {
+  const normalizedEmail = (email || '').trim();
+  if (!normalizedEmail) {
+    return null;
+  }
+
+  const lowerEmail = normalizedEmail.toLowerCase();
+
   try {
-    const snapshot = await db.ref(userMetaPath).orderByChild('email').equalTo(email).once('value');
-    if (snapshot.exists()) {
-      const val = snapshot.val();
-      const keys = Object.keys(val);
+    const exactSnapshot = await db.ref(userMetaPath).orderByChild('email').equalTo(normalizedEmail).once('value');
+    if (exactSnapshot.exists()) {
+      const exactVal = exactSnapshot.val();
+      const keys = Object.keys(exactVal);
       if (keys.length > 0) {
         return keys[0];
+      }
+    }
+
+    const fallbackSnapshot = await db.ref(userMetaPath).once('value');
+    const fallbackVal = fallbackSnapshot.val() || {};
+    for (const [key, value] of Object.entries(fallbackVal)) {
+      const candidateEmail = (value?.email || value?.emailAddress || '').trim().toLowerCase();
+      if (candidateEmail && candidateEmail === lowerEmail) {
+        return key;
       }
     }
   } catch (error) {
     console.error('UID 조회 오류:', error);
   }
+
   return null;
 }
 
 async function isEmailRegisteredInAuth(email) {
-  if (!email) {
-    return { exists: false, methods: [] };
+  const normalizedEmail = (email || '').trim();
+  if (!normalizedEmail) {
+    return { exists: false, methods: [], checkedEmails: [] };
+  }
+
+  const lowerEmail = normalizedEmail.toLowerCase();
+  const candidates = Array.from(new Set([normalizedEmail, lowerEmail]));
+  const checkedEmails = [];
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+
+    try {
+      const methods = await auth.fetchSignInMethodsForEmail(candidate);
+      const normalizedMethods = Array.isArray(methods) ? methods : [];
+      checkedEmails.push({ email: candidate, methods: normalizedMethods });
+
+      if (normalizedMethods.length > 0) {
+        return {
+          exists: true,
+          methods: normalizedMethods,
+          matchedEmail: candidate,
+          checkedEmails
+        };
+      }
+    } catch (error) {
+      lastError = error;
+      console.error('Authentication 이메일 확인 오류:', { email: candidate, error });
+
+      if (error.code === 'auth/invalid-email') {
+        continue;
+      }
+
+      if (error.code === 'auth/network-request-failed') {
+        return { exists: false, methods: [], error, checkedEmails };
+      }
+
+      throw error;
+    }
   }
 
   try {
-    const methods = await auth.fetchSignInMethodsForEmail(email);
-    const normalizedMethods = Array.isArray(methods) ? methods : [];
-    if (normalizedMethods.length > 0) {
-      return { exists: true, methods: normalizedMethods };
+    const fallbackUid = await findUidByEmail(normalizedEmail) || (lowerEmail !== normalizedEmail ? await findUidByEmail(lowerEmail) : null);
+    if (fallbackUid) {
+      return {
+        exists: true,
+        methods: [],
+        matchedEmail: normalizedEmail,
+        via: 'metadata',
+        checkedEmails
+      };
     }
-
-    return { exists: false, methods: normalizedMethods };
-  } catch (error) {
-    console.error('Authentication 이메일 확인 오류:', error);
-
-    if (error.code === 'auth/invalid-email') {
-      return { exists: false, methods: [] };
-    }
-
-    throw error;
+  } catch (metaError) {
+    console.error('Authentication 메타데이터 확인 오류:', metaError);
+    lastError = lastError || metaError;
   }
+
+  if (lastError && lastError.code && lastError.code !== 'auth/invalid-email') {
+    return { exists: false, methods: [], error: lastError, checkedEmails };
+  }
+
+  return { exists: false, methods: [], checkedEmails };
 }
 
 async function ensureDefaultAdminUser() {
@@ -157,9 +216,14 @@ async function ensureDefaultAdminUser() {
       return;
     }
 
-    const { exists: emailExists } = await isEmailRegisteredInAuth(defaultEmail);
+    const { exists: emailExists, error: authError, checkedEmails } = await isEmailRegisteredInAuth(defaultEmail);
+    if (authError) {
+      console.warn('기본 관리자 이메일 확인 중 오류가 발생했습니다:', authError, checkedEmails);
+      return;
+    }
+
     if (!emailExists) {
-      console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
+      console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail, checkedEmails);
       return;
     }
 
@@ -2141,8 +2205,15 @@ async function addNewUser() {
   }
 
   try {
-    const { exists: emailExists } = await isEmailRegisteredInAuth(email);
+    const { exists: emailExists, error: authError, checkedEmails } = await isEmailRegisteredInAuth(email);
+    if (authError) {
+      console.error('Firebase Authentication 확인 중 오류:', authError, checkedEmails);
+      alert('Firebase Authentication 확인 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      return;
+    }
+
     if (!emailExists) {
+      console.warn('Authentication에서 이메일을 찾을 수 없습니다:', email, checkedEmails);
       alert('Firebase Authentication에 등록된 계정이 아닙니다.');
       return;
     }
