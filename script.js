@@ -57,11 +57,28 @@ let isExtendedView = false;
 let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
 let historyCountsByProject = new Map();
+let selectedRowUids = new Set();
 
 let mainUsersData = null;
 let legacyUsersData = null;
 let userRecords = {};
 let userMetaCache = null;
+
+const PAGE_SIZE = 250;
+const LOAD_MORE_OFFSET = 400;
+const VIRTUAL_BUFFER_ROWS = 12;
+let lastLoadedKey = null;
+let hasMoreData = true;
+let isLoadingPage = false;
+let tableWrapper = null;
+let virtualTableBody = null;
+let virtualTopSpacer = null;
+let virtualBottomSpacer = null;
+let virtualRowHeight = 48;
+let virtualRowHeightMeasured = false;
+let needsVirtualMeasurement = false;
+let pendingVirtualRender = null;
+let virtualTableInitialized = false;
 
 // 필터 디바운스 타이머
 let filterDebounceTimer = null;
@@ -1059,6 +1076,8 @@ function registerEventListeners() {
   
   // 경과일 상태 카드 클릭 이벤트 리스너
   setupElapsedDayFilters();
+
+  initializeVirtualTable();
 }
 
 // 동작여부 상태 카드 클릭 이벤트 리스너 추가
@@ -1178,13 +1197,18 @@ function parseDateForFilter(value) {
 }
 
 // applyFilters 함수 수정 - 경과일 필터 추가
-function applyFilters() {
-  if (!dataLoaded || asData.length === 0) {
-    console.log('데이터가 아직 로드되지 않았습니다.');
+async function applyFilters(options = {}) {
+  const { skipEnsureAll = false, preserveScroll = false, forceMeasure = false } = options;
+
+  if (asData.length === 0) {
+    filteredData = [];
+    updateTable({ forceMeasure: true });
     return;
   }
 
-  // 필터값 수집
+  const tableScrollContainer = document.getElementById('tableWrapper');
+  const previousScrollTop = preserveScroll && tableScrollContainer ? tableScrollContainer.scrollTop : 0;
+
   const filters = {
     imo: document.getElementById('filterIMO').value.toLowerCase().trim(),
     hull: document.getElementById('filterHull').value.toLowerCase().trim(),
@@ -1205,109 +1229,115 @@ function applyFilters() {
   const deliveryStartTime = deliveryStartDate ? deliveryStartDate.getTime() : null;
   const deliveryEndTime = deliveryEndDate ? deliveryEndDate.getTime() : null;
 
-  // 경과일 필터 추가
   const elapsedDayFilter = window.elapsedDayFilter || null;
 
-  // 모든 필터가 비어있는지 확인 (경과일 필터 포함)
   const hasDateFilter = deliveryStartTime !== null || deliveryEndTime !== null;
   const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null || hasDateFilter;
 
-  if (!hasActiveFilter) {
-    // 필터가 없으면 빈 화면 표시
-    filteredData = [];
-    updateTable();
-    return;
+  if (hasActiveFilter && hasMoreData && !skipEnsureAll) {
+    await ensureAllDataLoaded();
   }
-  
-  // 필터링 실행
-  filteredData = asData.filter(row => {
-    // 빈 데이터 필터링
-    if (!row || !row.uid) return false;
-    
-    // 최소한의 데이터가 있는지 확인
-    const hasValidData = row.공번 || row.시스템 || row.imo || row.hull || row.project || row.shipName || row.manager || row.shipowner;
-    if (!hasValidData) return false;
-    
-    // 경과일 필터 적용
-    if (elapsedDayFilter !== null) {
-      if (row["기술적종료일"]) return false;
-      if (!row["AS접수일자"]) return false;
-      
-      const today = new Date();
-      const asDate = new Date(row["AS접수일자"] + "T00:00");
-      if (isNaN(asDate.getTime())) return false;
-      
-      const diffDays = Math.floor((today - asDate) / (1000 * 3600 * 24));
-      if (diffDays < elapsedDayFilter) return false;
-    }
-    
-    // 기존 필터들 적용
-    if (filters.imo && !String(row.imo || '').toLowerCase().includes(filters.imo)) {
-      return false;
-    }
-    
-    if (filters.hull && !String(row.hull || '').toLowerCase().includes(filters.hull)) {
-      return false;
-    }
-    
-    if (filters.name && !String(row.shipName || '').toLowerCase().includes(filters.name)) {
-      return false;
-    }
-    
-    if (filters.owner && !String(row.shipowner || '').toLowerCase().includes(filters.owner)) {
-      return false;
-    }
-    
-    if (filters.repMail && !String(row.repMail || '').toLowerCase().includes(filters.repMail)) {
-      return false;
-    }
-    
-    if (filters.asType && row.asType !== filters.asType) {
-      return false;
-    }
-    
-    if (filters.manager && !String(row.manager || '').toLowerCase().includes(filters.manager)) {
-      return false;
-    }
-    
-    if (filters.active && row.동작여부 !== filters.active) {
-      return false;
-    }
-    
-    if (filters.shipType && !String(row.shipType || '').toLowerCase().includes(filters.shipType)) {
-      return false;
-    }
-    
-    if (filters.shipyard && !String(row.shipyard || '').toLowerCase().includes(filters.shipyard)) {
-      return false;
-    }
 
-    if (hasDateFilter) {
-      const deliveryDate = parseDateForFilter(row.delivery);
-      if (!deliveryDate) return false;
+  const sourceData = asData;
 
-      const deliveryTime = deliveryDate.getTime();
-      if (deliveryStartTime !== null && deliveryTime < deliveryStartTime) {
+  if (!hasActiveFilter) {
+    filteredData = [...sourceData];
+  } else {
+    filteredData = sourceData.filter(row => {
+      if (!row || !row.uid) return false;
+
+      const hasValidData = row.공번 || row.시스템 || row.imo || row.hull || row.project || row.shipName || row.manager || row.shipowner;
+      if (!hasValidData) return false;
+
+      if (elapsedDayFilter !== null) {
+        if (row["기술적종료일"]) return false;
+        if (!row["AS접수일자"]) return false;
+
+        const today = new Date();
+        const asDate = new Date(row["AS접수일자"] + "T00:00");
+        if (isNaN(asDate.getTime())) return false;
+
+        const diffDays = Math.floor((today - asDate) / (1000 * 3600 * 24));
+        if (diffDays < elapsedDayFilter) return false;
+      }
+
+      if (filters.imo && !String(row.imo || '').toLowerCase().includes(filters.imo)) {
         return false;
       }
 
-      if (deliveryEndTime !== null && deliveryTime > deliveryEndTime) {
+      if (filters.hull && !String(row.hull || '').toLowerCase().includes(filters.hull)) {
         return false;
       }
-    }
 
-    return true;
-  });
-  
+      if (filters.name && !String(row.shipName || '').toLowerCase().includes(filters.name)) {
+        return false;
+      }
+
+      if (filters.owner && !String(row.shipowner || '').toLowerCase().includes(filters.owner)) {
+        return false;
+      }
+
+      if (filters.repMail && !String(row.repMail || '').toLowerCase().includes(filters.repMail)) {
+        return false;
+      }
+
+      if (filters.asType && row.asType !== filters.asType) {
+        return false;
+      }
+
+      if (filters.manager && !String(row.manager || '').toLowerCase().includes(filters.manager)) {
+        return false;
+      }
+
+      if (filters.active && row.동작여부 !== filters.active) {
+        return false;
+      }
+
+      if (filters.shipType && !String(row.shipType || '').toLowerCase().includes(filters.shipType)) {
+        return false;
+      }
+
+      if (filters.shipyard && !String(row.shipyard || '').toLowerCase().includes(filters.shipyard)) {
+        return false;
+      }
+
+      if (hasDateFilter) {
+        const deliveryDate = parseDateForFilter(row.delivery);
+        if (!deliveryDate) return false;
+
+        const deliveryTime = deliveryDate.getTime();
+        if (deliveryStartTime !== null && deliveryTime < deliveryStartTime) {
+          return false;
+        }
+
+        if (deliveryEndTime !== null && deliveryTime > deliveryEndTime) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
   console.log(`필터링 결과: ${filteredData.length}개`);
-  
-  // 정렬 적용
+
+  const filteredUidSet = new Set(filteredData.map(row => row.uid));
+  selectedRowUids = new Set(Array.from(selectedRowUids).filter(uid => filteredUidSet.has(uid)));
+
   if (sortField) {
     applySorting();
   }
-  
-  // 테이블 업데이트
-  updateTable();
+
+  const shouldForceMeasure = forceMeasure || !virtualRowHeightMeasured;
+  updateTable({ forceMeasure: shouldForceMeasure });
+
+  if (tableScrollContainer) {
+    if (preserveScroll) {
+      tableScrollContainer.scrollTop = previousScrollTop;
+    } else {
+      tableScrollContainer.scrollTop = 0;
+    }
+  }
 }
 
 // 정렬 적용 함수
@@ -1342,62 +1372,209 @@ function applySorting() {
   });
 }
 
-// 테이블 업데이트 함수 - 최적화
-function updateTable() {
+function initializeVirtualTable() {
+  if (virtualTableInitialized && tableWrapper && virtualTableBody) {
+    updateVirtualSpacerColspan();
+    return true;
+  }
+
+  tableWrapper = document.getElementById('tableWrapper');
+  virtualTableBody = document.getElementById('asBody');
+
+  if (!tableWrapper || !virtualTableBody) {
+    return false;
+  }
+
+  virtualTableBody.innerHTML = '';
+  virtualTopSpacer = createVirtualSpacerRow();
+  virtualBottomSpacer = createVirtualSpacerRow();
+  virtualTableBody.appendChild(virtualTopSpacer);
+  virtualTableBody.appendChild(virtualBottomSpacer);
+
+  tableWrapper.addEventListener('scroll', handleVirtualScroll, { passive: true });
+  window.addEventListener('resize', handleVirtualResize);
+
+  updateVirtualSpacerColspan();
+  virtualRowHeightMeasured = false;
+  needsVirtualMeasurement = true;
+  virtualTableInitialized = true;
+
+  return true;
+}
+
+function createVirtualSpacerRow() {
+  const tr = document.createElement('tr');
+  tr.className = 'virtual-spacer';
+  const td = document.createElement('td');
+  td.style.padding = '0';
+  td.style.border = 'none';
+  td.style.height = '0px';
+  td.colSpan = Math.max(document.querySelectorAll('#asTable thead th').length, 1);
+  tr.appendChild(td);
+  return tr;
+}
+
+function updateVirtualSpacerColspan() {
+  if (!virtualTopSpacer || !virtualBottomSpacer) return;
+  const columnCount = Math.max(document.querySelectorAll('#asTable thead th').length, 1);
+  [virtualTopSpacer, virtualBottomSpacer].forEach(spacer => {
+    const cell = spacer.firstChild || spacer.appendChild(document.createElement('td'));
+    cell.colSpan = columnCount;
+    cell.style.padding = '0';
+    cell.style.border = 'none';
+  });
+}
+
+function clearRenderedVirtualRows() {
+  if (!virtualTableBody || !virtualTopSpacer || !virtualBottomSpacer) return;
+  while (virtualTopSpacer.nextSibling && virtualTopSpacer.nextSibling !== virtualBottomSpacer) {
+    virtualTableBody.removeChild(virtualTopSpacer.nextSibling);
+  }
+}
+
+function scheduleVirtualRender(forceMeasure = false) {
+  if (forceMeasure) {
+    virtualRowHeightMeasured = false;
+    needsVirtualMeasurement = true;
+  }
+
+  if (pendingVirtualRender) return;
+
+  pendingVirtualRender = requestAnimationFrame(() => {
+    pendingVirtualRender = null;
+    renderVirtualRows();
+  });
+}
+
+function renderVirtualRows() {
+  if (!virtualTableInitialized) {
+    if (!initializeVirtualTable()) {
+      return;
+    }
+  }
+
+  if (!tableWrapper || !virtualTableBody || !virtualTopSpacer || !virtualBottomSpacer) return;
+
+  updateVirtualSpacerColspan();
+
+  const totalRows = filteredData.length;
+  const topCell = virtualTopSpacer.firstChild;
+  const bottomCell = virtualBottomSpacer.firstChild;
+
+  if (totalRows === 0) {
+    clearRenderedVirtualRows();
+    if (topCell) topCell.style.height = '0px';
+    if (bottomCell) bottomCell.style.height = '0px';
+    return;
+  }
+
+  if (!virtualRowHeightMeasured || needsVirtualMeasurement) {
+    measureVirtualRowHeight();
+    needsVirtualMeasurement = false;
+  }
+
+  const rowHeight = Math.max(virtualRowHeight, 1);
+  const scrollTop = tableWrapper.scrollTop;
+  const viewportHeight = tableWrapper.clientHeight;
+  const visibleCount = Math.ceil(viewportHeight / rowHeight) + VIRTUAL_BUFFER_ROWS * 2;
+
+  let startIndex = Math.floor(scrollTop / rowHeight) - VIRTUAL_BUFFER_ROWS;
+  if (startIndex < 0) startIndex = 0;
+  let endIndex = Math.min(totalRows, startIndex + visibleCount);
+  if (endIndex < totalRows && endIndex - startIndex < visibleCount) {
+    startIndex = Math.max(0, endIndex - visibleCount);
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (let i = startIndex; i < endIndex; i++) {
+    const tr = createTableRow(filteredData[i], i);
+    fragment.appendChild(tr);
+  }
+
+  clearRenderedVirtualRows();
+  virtualTableBody.insertBefore(fragment, virtualBottomSpacer);
+
+  if (topCell) topCell.style.height = `${startIndex * rowHeight}px`;
+  if (bottomCell) bottomCell.style.height = `${Math.max(totalRows - endIndex, 0) * rowHeight}px`;
+}
+
+function measureVirtualRowHeight() {
+  if (!virtualTableBody || filteredData.length === 0) {
+    return;
+  }
+
+  const sampleRow = createTableRow(filteredData[0], 0);
+  sampleRow.style.visibility = 'hidden';
+  virtualTableBody.insertBefore(sampleRow, virtualBottomSpacer);
+  const measuredHeight = sampleRow.getBoundingClientRect().height;
+  virtualRowHeight = measuredHeight > 0 ? measuredHeight : virtualRowHeight;
+  virtualRowHeightMeasured = true;
+  virtualTableBody.removeChild(sampleRow);
+}
+
+function handleVirtualScroll() {
+  scheduleVirtualRender();
+  maybeLoadMoreData();
+}
+
+function handleVirtualResize() {
+  scheduleVirtualRender(true);
+}
+
+function maybeLoadMoreData() {
+  if (!tableWrapper || !hasMoreData || isLoadingPage) return;
+  const distanceToBottom = tableWrapper.scrollHeight - (tableWrapper.scrollTop + tableWrapper.clientHeight);
+  if (distanceToBottom > LOAD_MORE_OFFSET) return;
+
+  loadData({ silent: true }).then(async loaded => {
+    if (loaded > 0) {
+      await applyFilters({ skipEnsureAll: true, preserveScroll: true });
+    }
+  }).catch(error => {
+    console.error('추가 데이터 로드 실패:', error);
+  });
+}
+
+// 테이블 업데이트 함수 - 가상 스크롤 적용
+function updateTable(options = {}) {
+  const { forceMeasure = false } = options;
+
   if (isTableRendering) return;
   isTableRendering = true;
-  
+
   try {
-    // 헤더 렌더링
     renderTableHeaders();
-    
-    // 바디 렌더링
-    const tbody = document.getElementById('asBody');
-    tbody.innerHTML = '';
-    
-    // 상태 집계
-    const counts = {정상: 0, 부분동작: 0, 동작불가: 0};
-    
-    // DocumentFragment 사용하여 성능 향상
-    const fragment = document.createDocumentFragment();
-    
+
+    initializeVirtualTable();
+
+    const counts = { 정상: 0, 부분동작: 0, 동작불가: 0 };
     filteredData.forEach(row => {
       if (counts.hasOwnProperty(row.동작여부)) {
         counts[row.동작여부]++;
       }
-      const tr = createTableRow(row);
-      fragment.appendChild(tr);
     });
-    
-    tbody.appendChild(fragment);
-    
-    // 상태 업데이트
+
     updateStatusCounts(counts);
     updateElapsedDayCounts();
     updateSidebarList();
-    
+
+    scheduleVirtualRender(forceMeasure);
+    updateSelectAllState();
+    refreshVisibleCheckboxStates();
   } finally {
     isTableRendering = false;
   }
 }
 
 // 전체 데이터 로드 및 표시
-function loadAllData() {
-  if (!dataLoaded || asData.length === 0) {
+async function loadAllData() {
+  if (asData.length === 0) {
     console.log('데이터가 아직 로드되지 않았습니다.');
     return;
   }
-  
-  // 전체 데이터를 필터링된 데이터로 설정
-  filteredData = [...asData];
-  
-  // 정렬 적용
-  if (sortField) {
-    applySorting();
-  }
-  
-  // 테이블 업데이트
-  updateTable();
+
+  await ensureAllDataLoaded();
+  await applyFilters({ skipEnsureAll: true, forceMeasure: true });
 }
 
 // 전체조회 버튼 함수도 수정
@@ -1467,9 +1644,9 @@ function switchTableView(extended) {
   // 버튼 상태 변경
   document.getElementById('basicViewBtn').classList.toggle('active', !extended);
   document.getElementById('extendedViewBtn').classList.toggle('active', extended);
-  
+
   // 현재 필터링된 데이터로 테이블 다시 렌더링
-  updateTable();
+  updateTable({ forceMeasure: true });
 }
 
 // 경과일 필터 설정
@@ -1900,8 +2077,9 @@ function resetInterface() {
   document.getElementById('loginUser').value = '';
   document.getElementById('loginPw').value = '';
   document.getElementById('loginError').textContent = '';
-  
+
   asData = [];
+  selectedRowUids.clear();
   dataLoaded = false;
 }
 
@@ -1909,14 +2087,14 @@ function resetInterface() {
 function showMainInterface() {
   document.getElementById('sidebar').classList.remove('hidden');
   document.getElementById('mainContainer').classList.remove('hidden');
-  
+
   if (!dataLoaded) {
+    dataLoaded = true;
     testConnection();
-    loadData();
+    initializeData();
     loadAiConfig();
     loadApiConfig();
     loadPathConfig();
-    dataLoaded = true;
   }
 }
 
@@ -2746,60 +2924,150 @@ function assignHistoryCountsToRows(countMap = new Map(), rows = asData) {
   });
 }
 
-async function loadData() {
-  const snap = await db.ref(asPath).once('value');
-  const val = snap.val() || {};
+async function loadData(options = {}) {
+  const { reset = false, silent = false } = options;
 
-  asData = [];
-  Object.keys(val).forEach(key => {
-    const r = val[key];
+  if (isLoadingPage) {
+    return 0;
+  }
 
-    // 빈 객체이거나 유효하지 않은 데이터는 건너뛰기
-    if (!r || typeof r !== 'object') return;
+  if (reset) {
+    lastLoadedKey = null;
+    hasMoreData = true;
+    asData = [];
+    filteredData = [];
+    selectedRowUids.clear();
+    virtualRowHeightMeasured = false;
+    needsVirtualMeasurement = true;
 
-    // 최소한 하나 이상의 필수 필드가 있는지 확인
-    const hasRequiredFields = r.공번 || r.공사 || r.시스템 || r.imo || r.hull || r.shipName || r.manager || r.shipowner;
-    if (!hasRequiredFields) return;
+    if (virtualTopSpacer && virtualBottomSpacer && virtualTableBody) {
+      clearRenderedVirtualRows();
+      const topCell = virtualTopSpacer.firstChild;
+      const bottomCell = virtualBottomSpacer.firstChild;
+      if (topCell) topCell.style.height = '0px';
+      if (bottomCell) bottomCell.style.height = '0px';
+    }
+  }
 
-    // uid가 없으면 key를 uid로 설정
-    if (!r.uid) r.uid = key;
+  if (!hasMoreData) {
+    return 0;
+  }
 
-    // 호환 처리
-    if (r["현 담당"] && !r.manager) r.manager = r["현 담당"];
-    if (r["SHIPOWNER"] && !r.shipowner) r.shipowner = r["SHIPOWNER"];
-    if (!('시스템' in r)) r.시스템 = r.공사 || '';
-    if ('공사' in r) delete r.공사;
-    if (!('project' in r)) r.project = '';
-    if (!("AS접수일자" in r)) r["AS접수일자"] = "";
-    if (!("정상지연" in r)) r["정상지연"] = "";
-    if (!("지연 사유" in r)) r["지연 사유"] = "";
-    if (!("수정일" in r)) r["수정일"] = "";
-    if (!("api_name" in r)) r["api_name"] = "";
-    if (!("api_owner" in r)) r["api_owner"] = "";
-    if (!("api_manager" in r)) r["api_manager"] = "";
-    if (!("현황번역" in r)) r["현황번역"] = "";
-    if (!('hwType' in r)) r.hwType = '';
-    if (!('software' in r)) r.software = '';
-    if (!('cpuRomVer' in r)) r.cpuRomVer = '';
-    if (!('rauRomVer' in r)) r.rauRomVer = '';
+  isLoadingPage = true;
 
-    // 동작여부 값 변환
-    if (r.동작여부 === "정상A" || r.동작여부 === "정상B" || r.동작여부 === "유상정상") {
-      r.동작여부 = "정상";
+  try {
+    let query = db.ref(asPath).orderByKey();
+    const canUseStartAfter = typeof query.startAfter === 'function';
+
+    if (lastLoadedKey) {
+      query = canUseStartAfter ? query.startAfter(lastLoadedKey) : query.startAt(lastLoadedKey);
     }
 
-    r.historyCounts = createEmptyHistoryCounts();
-    asData.push(r);
-  });
+    const fetchLimit = PAGE_SIZE + (lastLoadedKey && !canUseStartAfter ? 1 : 0);
+    query = query.limitToFirst(fetchLimit);
 
-  console.log(`데이터 로드 완료: 총 ${asData.length}개 (원본: ${Object.keys(val).length}개)`);
+    const snapshot = await query.once('value');
+    const rawValue = snapshot.val() || {};
+    let entries = Object.entries(rawValue);
+    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 
-  await loadHistoryCounts();
-  loadHistoryEmbeddingIndex().catch(err => console.error('히스토리 임베딩 사전 로드 오류:', err));
+    if (lastLoadedKey && !canUseStartAfter) {
+      entries = entries.filter(([key]) => key !== lastLoadedKey);
+    }
 
-  dataLoaded = true;
-  updateSidebarList();
-  applyFilters();
+    if (entries.length === 0) {
+      hasMoreData = false;
+      return 0;
+    }
+
+    const newRows = [];
+
+    entries.forEach(([key, value]) => {
+      const row = value;
+      if (!row || typeof row !== 'object') return;
+
+      const hasRequiredFields = row.공번 || row.공사 || row.시스템 || row.imo || row.hull || row.shipName || row.manager || row.shipowner;
+      if (!hasRequiredFields) return;
+
+      if (!row.uid) row.uid = key;
+
+      if (row["현 담당"] && !row.manager) row.manager = row["현 담당"];
+      if (row["SHIPOWNER"] && !row.shipowner) row.shipowner = row["SHIPOWNER"];
+      if (!('시스템' in row)) row.시스템 = row.공사 || '';
+      if ('공사' in row) delete row.공사;
+      if (!('project' in row)) row.project = '';
+      if (!("AS접수일자" in row)) row["AS접수일자"] = "";
+      if (!("정상지연" in row)) row["정상지연"] = "";
+      if (!("지연 사유" in row)) row["지연 사유"] = "";
+      if (!("수정일" in row)) row["수정일"] = "";
+      if (!("api_name" in row)) row["api_name"] = "";
+      if (!("api_owner" in row)) row["api_owner"] = "";
+      if (!("api_manager" in row)) row["api_manager"] = "";
+      if (!("현황번역" in row)) row["현황번역"] = "";
+      if (!('hwType' in row)) row.hwType = '';
+      if (!('software' in row)) row.software = '';
+      if (!('cpuRomVer' in row)) row.cpuRomVer = '';
+      if (!('rauRomVer' in row)) row.rauRomVer = '';
+
+      if (row.동작여부 === "정상A" || row.동작여부 === "정상B" || row.동작여부 === "유상정상") {
+        row.동작여부 = "정상";
+      }
+
+      row.historyCounts = createEmptyHistoryCounts();
+      newRows.push(row);
+    });
+
+    if (newRows.length === 0) {
+      if (entries.length < fetchLimit) {
+        hasMoreData = false;
+      }
+      return 0;
+    }
+
+    asData = asData.concat(newRows);
+    lastLoadedKey = entries[entries.length - 1][0];
+
+    if (entries.length < fetchLimit) {
+      hasMoreData = false;
+    }
+
+    if (historyCountsByProject && historyCountsByProject.size > 0) {
+      assignHistoryCountsToRows(historyCountsByProject, newRows);
+    }
+
+    updateSidebarList();
+
+    if (!silent) {
+      await applyFilters({ skipEnsureAll: true, preserveScroll: true });
+    }
+
+    return newRows.length;
+  } catch (error) {
+    console.error('데이터 로드 오류:', error);
+    throw error;
+  } finally {
+    isLoadingPage = false;
+  }
+}
+
+async function ensureAllDataLoaded() {
+  while (hasMoreData) {
+    const loaded = await loadData({ silent: true });
+    if (!loaded) {
+      break;
+    }
+  }
+}
+
+async function initializeData() {
+  try {
+    await loadData({ reset: true, silent: true });
+    await loadHistoryCounts();
+    loadHistoryEmbeddingIndex().catch(err => console.error('히스토리 임베딩 사전 로드 오류:', err));
+    await applyFilters({ skipEnsureAll: true, forceMeasure: true });
+  } catch (error) {
+    console.error('초기 데이터 로드 오류:', error);
+  }
 }
 
 // 히스토리 건수 로드
@@ -3029,14 +3297,20 @@ function addNewRow() {
 
 // 선택 행 삭제
 async function deleteSelectedRows() {
-  const cks = document.querySelectorAll('.rowSelectChk:checked');
-  if (!cks.length) {
+  const selected = Array.from(selectedRowUids);
+  if (!selected.length) {
     alert("삭제할 행을 선택하세요.");
     return;
   }
   if (!confirm("정말 삭제하시겠습니까?")) return;
-  
-  const uidsToDelete = Array.from(cks).map(chk => chk.dataset.uid);
+
+  const visibleUidSet = new Set(filteredData.map(row => row.uid));
+  const uidsToDelete = selected.filter(uid => visibleUidSet.size === 0 || visibleUidSet.has(uid));
+
+  if (!uidsToDelete.length) {
+    alert('현재 화면에 표시된 항목 중 삭제할 행이 없습니다.');
+    return;
+  }
   
   try {
     // Firebase에서 삭제할 항목들을 null로 설정
@@ -3057,8 +3331,8 @@ async function deleteSelectedRows() {
     }
     
     // 체크박스 초기화
-    document.getElementById('selectAll').checked = false;
-    
+    selectedRowUids.clear();
+
     // 테이블 업데이트
     updateTable();
     
@@ -3073,16 +3347,61 @@ async function deleteSelectedRows() {
   } catch (error) {
     console.error("삭제 중 오류 발생:", error);
     alert("삭제 중 오류가 발생했습니다: " + error.message);
-    
+
     // 오류 발생 시 데이터 다시 로드
-    loadData();
+    initializeData();
   }
+}
+
+function refreshVisibleCheckboxStates() {
+  document.querySelectorAll('.rowSelectChk').forEach(chk => {
+    const uid = chk.dataset.uid;
+    chk.checked = selectedRowUids.has(uid);
+  });
+}
+
+function updateSelectAllState() {
+  const selectAllCheckbox = document.getElementById('selectAll');
+  if (!selectAllCheckbox) return;
+
+  const total = filteredData.length;
+  if (total === 0) {
+    selectAllCheckbox.checked = false;
+    selectAllCheckbox.indeterminate = false;
+    return;
+  }
+
+  let selectedCount = 0;
+  filteredData.forEach(row => {
+    if (row && selectedRowUids.has(row.uid)) {
+      selectedCount++;
+    }
+  });
+
+  selectAllCheckbox.checked = selectedCount === total && total > 0;
+  selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < total;
 }
 
 // 모든 체크박스 선택/해제
 function toggleSelectAll(e) {
-  const cks = document.querySelectorAll('.rowSelectChk');
-  cks.forEach(c => c.checked = e.target.checked);
+  const shouldSelectAll = e.target.checked;
+
+  if (shouldSelectAll) {
+    filteredData.forEach(row => {
+      if (row && row.uid) {
+        selectedRowUids.add(row.uid);
+      }
+    });
+  } else {
+    filteredData.forEach(row => {
+      if (row && row.uid) {
+        selectedRowUids.delete(row.uid);
+      }
+    });
+  }
+
+  updateSelectAllState();
+  refreshVisibleCheckboxStates();
 }
 
 // 테이블 클릭 이벤트 핸들러
@@ -3181,9 +3500,13 @@ function updateElapsedDayCounts() {
 }
 // 테이블 행 생성
 // 테이블 행 생성
-function createTableRow(row) {
+function createTableRow(row, rowIndex = 0) {
   const tr = document.createElement('tr');
-  
+  if (row && row.uid) {
+    tr.dataset.uid = row.uid;
+  }
+  tr.dataset.index = rowIndex;
+
   const columnsToShow = isExtendedView ? allColumns : basicColumns;
 
   columnsToShow.forEach(columnKey => {
@@ -3303,6 +3626,15 @@ function createCheckboxCell(row) {
   chk.type = 'checkbox';
   chk.classList.add('rowSelectChk');
   chk.dataset.uid = row.uid;
+  chk.checked = selectedRowUids.has(row.uid);
+  chk.addEventListener('change', (event) => {
+    if (event.target.checked) {
+      selectedRowUids.add(row.uid);
+    } else {
+      selectedRowUids.delete(row.uid);
+    }
+    updateSelectAllState();
+  });
   td.appendChild(chk);
   return td;
 }
@@ -7064,8 +7396,8 @@ async function translateStatusField() {
     return;
   }
   
-  const rows = document.querySelectorAll('#asBody tr');
-  if (rows.length === 0) {
+  const targetRows = (filteredData.length > 0 ? filteredData : asData).filter(row => row && row.uid);
+  if (targetRows.length === 0) {
     alert('번역할 데이터가 없습니다.');
     return;
   }
@@ -7090,39 +7422,38 @@ async function translateStatusField() {
   progressIndicator.className = 'translation-progress';
   progressIndicator.innerHTML = `
     <div class="translation-spinner"></div>
-    <div>${targetLangName}로 번역 중... (0/${rows.length})</div>
+    <div>${targetLangName}로 번역 중... (0/${targetRows.length})</div>
   `;
   document.body.appendChild(progressIndicator);
-  
+
   document.getElementById('asTable').classList.add('translating');
   document.getElementById('translateBtn').disabled = true;
-  
+
   try {
     const updates = {};
     let successCount = 0;
     let errorCount = 0;
-    
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      
+
+    for (let i = 0; i < targetRows.length; i++) {
+      const rowData = targetRows[i];
+
       try {
-        const checkbox = row.querySelector('.rowSelectChk');
-        if (!checkbox) continue;
-        
-        const uid = checkbox.dataset.uid;
+        const uid = rowData.uid;
         if (!uid) continue;
-        
-        const statusCell = row.querySelector('td[data-field="현황"] input');
-        if (!statusCell || !statusCell.value.trim()) continue;
-        
-        const originalText = statusCell.value.trim();
-        
-        const rowData = asData.find(r => r.uid === uid);
-        if (!rowData) continue;
-        
+
+        const rowElement = document.querySelector(`tr[data-uid="${uid}"]`);
+        const statusInput = rowElement ? rowElement.querySelector('td[data-field="현황"] input') : null;
+        const originalText = statusInput && statusInput.value.trim()
+          ? statusInput.value.trim()
+          : String(rowData.현황 || '').trim();
+
+        if (!originalText) continue;
+
+        rowData.현황 = originalText;
+
         const currentTranslationKey = `현황번역_${currentLanguage}`;
         if (rowData[currentTranslationKey] && rowData.현황 === originalText) {
-          const translationCell = row.querySelector('td[data-field="현황번역"] input');
+          const translationCell = rowElement ? rowElement.querySelector('td[data-field="현황번역"] input') : null;
           if (translationCell) {
             translationCell.value = rowData[currentTranslationKey];
           }
@@ -7130,13 +7461,13 @@ async function translateStatusField() {
         } else {
           try {
             const translatedText = await translateText(originalText, translationDirection.to);
-            
+
             if (translatedText && translatedText.trim()) {
-              const translationCell = row.querySelector('td[data-field="현황번역"] input');
+              const translationCell = rowElement ? rowElement.querySelector('td[data-field="현황번역"] input') : null;
               if (translationCell) {
                 translationCell.value = translatedText;
               }
-              
+
               rowData.현황번역 = translatedText;
               rowData[currentTranslationKey] = translatedText;
               updates[`${asPath}/${uid}/현황번역`] = translatedText;
@@ -7151,10 +7482,10 @@ async function translateStatusField() {
             errorCount++;
           }
         }
-        
-        progressIndicator.querySelector('div:last-child').textContent = 
-          `${targetLangName}로 번역 중... (${i+1}/${rows.length}) - 성공: ${successCount}, 실패: ${errorCount}`;
-        
+
+        progressIndicator.querySelector('div:last-child').textContent =
+          `${targetLangName}로 번역 중... (${i+1}/${targetRows.length}) - 성공: ${successCount}, 실패: ${errorCount}`;
+
       } catch (rowError) {
         console.error(`행 ${i+1} 처리 오류:`, rowError);
         errorCount++;

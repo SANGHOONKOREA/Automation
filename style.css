@@ -808,6 +808,13 @@ kbd {
   position: relative;
 }
 
+.virtual-spacer td {
+  padding: 0 !important;
+  border: none !important;
+  height: 0;
+  pointer-events: none;
+}
+
 .table-wrapper::-webkit-scrollbar {
   width: 12px;
   height: 12px;
