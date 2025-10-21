@@ -355,7 +355,7 @@ async function ensureDefaultAdminUser() {
     const { registered: emailRegistered, uid: resolvedUid } = await verifyEmailRegistration(defaultEmail);
     if (!emailRegistered) {
       console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
-      return;
+      console.warn('기본 관리자 계정은 등록되지만 Firebase Authentication에 계정을 생성해야 로그인할 수 있습니다.');
     }
 
     const uid = resolvedUid || await resolveUidByEmail(defaultEmail);
@@ -1992,7 +1992,7 @@ function performLogin() {
           errorMsg = "비밀번호가 올바르지 않습니다.";
           break;
         case 'auth/user-not-found':
-          errorMsg = "등록되지 않은 이메일입니다.";
+          errorMsg = "이 페이지에는 추가된 사용자는 Firebase Authentication에서 별도로 계정을 생성해야 로그인할 수 있습니다. Firebase Console → Authentication → Users에서 직접 추가하거나, 사용자에게 회원가입 링크를 안내해주세요.";
           break;
         case 'auth/invalid-email':
           errorMsg = "유효하지 않은 이메일 형식입니다.";
@@ -2207,7 +2207,7 @@ function sendPasswordResetEmail() {
       let errorMsg = '이메일 전송 중 오류가 발생했습니다.';
       
       if (error.code === 'auth/user-not-found') {
-        errorMsg = '해당 이메일로 등록된 사용자가 없습니다.';
+        errorMsg = '이메일과 연결된 Firebase Authentication 계정을 찾을 수 없습니다. Firebase Console → Authentication → Users에서 계정을 생성하거나, 사용자에게 회원가입 링크를 안내해주세요.';
       } else if (error.code === 'auth/invalid-email') {
         errorMsg = '유효하지 않은 이메일 형식입니다.';
       }
@@ -2345,8 +2345,6 @@ async function addNewUser() {
 
     if (!emailRegistered) {
       console.warn('Authentication에서 이메일을 찾을 수 없습니다:', email);
-      alert('Firebase Authentication에 등록된 계정이 아닙니다.');
-      return;
     }
 
     const safeKey = sanitizeKey(email);
@@ -2375,7 +2373,12 @@ async function addNewUser() {
 
     await userRef.set(newEntry);
 
-    alert(existingData ? '사용자 정보가 업데이트되었습니다.' : '사용자가 등록되었습니다.');
+    let alertMessage = existingData ? '사용자 정보가 업데이트되었습니다.' : '사용자가 등록되었습니다.';
+    if (!emailRegistered) {
+      alertMessage += '\n\n이 사용자가 로그인하려면 Firebase Authentication에 계정을 생성해야 합니다. Firebase Console → Authentication → Users에서 직접 추가하거나, 사용자에게 회원가입 링크를 안내해주세요.';
+    }
+
+    alert(alertMessage);
 
     if (emailInput) emailInput.value = '';
     if (managerInput) managerInput.value = '';
