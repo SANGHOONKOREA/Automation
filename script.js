@@ -168,10 +168,12 @@ async function requestAuthUriStatus(email) {
     const payload = await response.json();
     const methods = Array.isArray(payload.signinMethods) ? payload.signinMethods : [];
     const providers = Array.isArray(payload.allProviders) ? payload.allProviders : [];
+    const combined = methods.length ? methods : providers;
+    const registered = payload.registered === true || combined.length > 0;
 
     return {
-      registered: Boolean(payload.registered),
-      methods: methods.length ? methods : providers,
+      registered,
+      methods: combined,
       raw: payload
     };
   } catch (error) {
@@ -225,17 +227,20 @@ async function isEmailRegisteredInAuth(email) {
 
   for (const candidate of candidates) {
     const restResult = await requestAuthUriStatus(candidate);
+    const resolvedMethods = Array.isArray(restResult.methods) ? restResult.methods : [];
+    const resolvedRegistered = Boolean(restResult.registered || resolvedMethods.length > 0);
+
     checkedEmails.push({
       email: candidate,
-      methods: Array.isArray(restResult.methods) ? restResult.methods : [],
+      methods: resolvedMethods,
       source: 'rest',
-      registered: restResult.registered
+      registered: resolvedRegistered
     });
 
-    if (restResult.registered) {
+    if (resolvedRegistered) {
       return {
         exists: true,
-        methods: Array.isArray(restResult.methods) ? restResult.methods : [],
+        methods: resolvedMethods,
         matchedEmail: candidate,
         via: 'rest',
         checkedEmails
