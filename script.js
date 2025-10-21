@@ -122,6 +122,30 @@ async function findUidByEmail(email) {
   return null;
 }
 
+async function isEmailRegisteredInAuth(email) {
+  if (!email) {
+    return { exists: false, methods: [] };
+  }
+
+  try {
+    const methods = await auth.fetchSignInMethodsForEmail(email);
+    const normalizedMethods = Array.isArray(methods) ? methods : [];
+    if (normalizedMethods.length > 0) {
+      return { exists: true, methods: normalizedMethods };
+    }
+
+    return { exists: false, methods: normalizedMethods };
+  } catch (error) {
+    console.error('Authentication 이메일 확인 오류:', error);
+
+    if (error.code === 'auth/invalid-email') {
+      return { exists: false, methods: [] };
+    }
+
+    throw error;
+  }
+}
+
 async function ensureDefaultAdminUser() {
   const defaultEmail = 'sanghoon.seo@snsys.net';
   const safeKey = sanitizeKey(defaultEmail);
@@ -133,8 +157,8 @@ async function ensureDefaultAdminUser() {
       return;
     }
 
-    const methods = await auth.fetchSignInMethodsForEmail(defaultEmail);
-    if (!methods || methods.length === 0) {
+    const { exists: emailExists } = await isEmailRegisteredInAuth(defaultEmail);
+    if (!emailExists) {
       console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
       return;
     }
@@ -2117,8 +2141,8 @@ async function addNewUser() {
   }
 
   try {
-    const methods = await auth.fetchSignInMethodsForEmail(email);
-    if (!methods || methods.length === 0) {
+    const { exists: emailExists } = await isEmailRegisteredInAuth(email);
+    if (!emailExists) {
       alert('Firebase Authentication에 등록된 계정이 아닙니다.');
       return;
     }
