@@ -58,6 +58,11 @@ let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
 let historyCountsByProject = new Map();
 
+let mainUsersData = null;
+let legacyUsersData = null;
+let userRecords = {};
+let userMetaCache = null;
+
 // 필터 디바운스 타이머
 let filterDebounceTimer = null;
 
@@ -75,6 +80,91 @@ const pathConfigPath = "as-service/admin/pathConfig";
 const userMetaPath = 'as-service/user_meta';
 const adminPasswordPath = 'as-service/admin/password';
 const legacyUsersPath = 'users';
+
+function normalizeEmail(email) {
+  if (!email || (typeof email !== 'string' && typeof email !== 'number')) {
+    return '';
+  }
+
+  const trimmed = String(email).trim();
+  if (!trimmed || !trimmed.includes('@')) {
+    return '';
+  }
+
+  return trimmed.toLowerCase();
+}
+
+function rebuildUserLookupCaches() {
+  userRecords = {};
+
+  const mergeRecords = (records) => {
+    if (!records || typeof records !== 'object') return;
+
+    for (const [key, value] of Object.entries(records)) {
+      if (!userRecords[key]) {
+        userRecords[key] = value || {};
+      } else {
+        userRecords[key] = {
+          ...(userRecords[key] || {}),
+          ...(value || {})
+        };
+      }
+    }
+  };
+
+  mergeRecords(mainUsersData);
+  mergeRecords(legacyUsersData);
+}
+
+async function loadMainUsersData(force = false) {
+  if (!force && mainUsersData !== null) {
+    return mainUsersData;
+  }
+
+  try {
+    const snapshot = await db.ref(userPath).once('value');
+    mainUsersData = snapshot.val() || {};
+  } catch (error) {
+    console.error('메인 사용자 목록 로드 오류:', error);
+    mainUsersData = {};
+  }
+
+  rebuildUserLookupCaches();
+  return mainUsersData;
+}
+
+async function loadLegacyUsersData(force = false) {
+  if (!force && legacyUsersData !== null) {
+    return legacyUsersData;
+  }
+
+  try {
+    const snapshot = await db.ref(legacyUsersPath).once('value');
+    legacyUsersData = snapshot.val() || {};
+  } catch (error) {
+    console.error('레거시 사용자 목록 로드 오류:', error);
+    legacyUsersData = {};
+  }
+
+  rebuildUserLookupCaches();
+  return legacyUsersData;
+}
+
+async function loadUserMetaCache(force = false) {
+  if (!force && userMetaCache !== null) {
+    return userMetaCache;
+  }
+
+  try {
+    const snapshot = await db.ref(userMetaPath).once('value');
+    userMetaCache = snapshot.val() || {};
+  } catch (error) {
+    console.error('사용자 메타데이터 로드 오류:', error);
+    userMetaCache = {};
+  }
+
+  return userMetaCache;
+}
 
 function sanitizeKey(value = '') {
   return value
@@ -95,184 +185,140 @@ async function fetchUserDirectory() {
   try {
     const primarySnap = await db.ref(userPath).once('value');
     if (primarySnap.exists()) {
-      return { path: userPath, data: primarySnap.val() || {} };
+      const primaryData = primarySnap.val() || {};
+      mainUsersData = primaryData;
+      rebuildUserLookupCaches();
+      return { path: userPath, data: primaryData };
     }
 
     const legacySnap = await db.ref(legacyUsersPath).once('value');
-    return { path: legacyUsersPath, data: legacySnap.val() || {} };
+    const legacyData = legacySnap.val() || {};
+    legacyUsersData = legacyData;
+    rebuildUserLookupCaches();
+    return { path: legacyUsersPath, data: legacyData };
   } catch (error) {
     console.error('사용자 디렉토리 조회 오류:', error);
+    if (mainUsersData === null) mainUsersData = {};
+    if (legacyUsersData === null) legacyUsersData = {};
+    rebuildUserLookupCaches();
     return { path: userPath, data: {} };
   }
 }
 
-async function findUidByEmail(email) {
-  const normalizedEmail = (email || '').trim();
-  if (!normalizedEmail) {
+async function resolveUidByEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) {
     return null;
   }
 
-  const lowerEmail = normalizedEmail.toLowerCase();
+  const findUid = (records) => {
+    if (!records || typeof records !== 'object') return null;
 
-  try {
-    const exactSnapshot = await db.ref(userMetaPath).orderByChild('email').equalTo(normalizedEmail).once('value');
-    if (exactSnapshot.exists()) {
-      const exactVal = exactSnapshot.val();
-      const keys = Object.keys(exactVal);
-      if (keys.length > 0) {
-        return keys[0];
+    for (const [uid, data] of Object.entries(records)) {
+      const candidateEmail = normalizeEmail(data?.email || data?.emailAddress);
+      if (candidateEmail && candidateEmail === normalized) {
+        return data?.uid || uid;
       }
     }
 
-    const fallbackSnapshot = await db.ref(userMetaPath).once('value');
-    const fallbackVal = fallbackSnapshot.val() || {};
-    for (const [key, value] of Object.entries(fallbackVal)) {
-      const candidateEmail = (value?.email || value?.emailAddress || '').trim().toLowerCase();
-      if (candidateEmail && candidateEmail === lowerEmail) {
-        return key;
-      }
-    }
-  } catch (error) {
-    console.error('UID 조회 오류:', error);
+    return null;
+  };
+
+  if (mainUsersData === null || !Object.keys(mainUsersData).length) {
+    await loadMainUsersData();
   }
 
-  return null;
+  let resolved = findUid(mainUsersData);
+  if (!resolved) {
+    await loadMainUsersData(true);
+    resolved = findUid(mainUsersData);
+  }
+
+  if (resolved) {
+    return resolved;
+  }
+
+  if (!userRecords || !Object.keys(userRecords).length) {
+    await loadLegacyUsersData();
+  }
+
+  resolved = findUid(userRecords);
+  if (!resolved) {
+    await loadLegacyUsersData(true);
+    resolved = findUid(userRecords);
+  }
+
+  if (resolved) {
+    return resolved;
+  }
+
+  if (userMetaCache === null || !Object.keys(userMetaCache).length) {
+    await loadUserMetaCache();
+  }
+
+  resolved = findUid(userMetaCache);
+  if (!resolved) {
+    await loadUserMetaCache(true);
+    resolved = findUid(userMetaCache);
+  }
+
+  return resolved;
 }
 
-async function requestAuthUriStatus(email) {
-  const identifier = (email || '').trim();
-  if (!identifier) {
-    return { registered: false };
+async function verifyEmailRegistration(email, existingUid = null) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) {
+    return { registered: false, uid: null };
   }
 
-  const continueUri = `https://${firebaseConfig.authDomain}`;
-  const endpoint = `https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`;
+  let resolvedUid = existingUid || null;
+
+  if (!resolvedUid) {
+    resolvedUid = await resolveUidByEmail(normalized);
+  }
+
+  if (resolvedUid) {
+    return { registered: true, uid: resolvedUid };
+  }
 
   try {
-    const response = await fetch(endpoint, {
+    const methods = await auth.fetchSignInMethodsForEmail(normalized);
+    if (Array.isArray(methods) && methods.length > 0) {
+      return { registered: true, uid: null };
+    }
+  } catch (error) {
+    if (error?.code === 'auth/invalid-email') {
+      throw error;
+    }
+    console.warn('이메일 인증 방법 조회 실패:', error);
+  }
+
+  try {
+    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        identifier,
-        continueUri
+        identifier: normalized,
+        continueUri: (typeof window !== 'undefined' && window?.location?.origin) || 'https://snsys.net'
       })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`createAuthUri 실패: ${response.status} ${response.statusText} - ${errorText}`);
+    const data = await response.json();
+
+    if (data?.registered) {
+      return { registered: true, uid: null };
     }
 
-    const payload = await response.json();
-    const methods = Array.isArray(payload.signinMethods) ? payload.signinMethods : [];
-    const providers = Array.isArray(payload.allProviders) ? payload.allProviders : [];
-    const combined = methods.length ? methods : providers;
-    const registered = payload.registered === true || combined.length > 0;
-
-    return {
-      registered,
-      methods: combined,
-      raw: payload
-    };
+    if (data?.error) {
+      console.warn('Firebase createAuthUri 오류:', data.error);
+    }
   } catch (error) {
-    console.error('createAuthUri 호출 오류:', { email: identifier, error });
-    return { registered: false, error };
-  }
-}
-
-async function isEmailRegisteredInAuth(email) {
-  const normalizedEmail = (email || '').trim();
-  if (!normalizedEmail) {
-    return { exists: false, methods: [], checkedEmails: [] };
+    console.error('Firebase 등록 이메일 확인 오류:', error);
   }
 
-  const lowerEmail = normalizedEmail.toLowerCase();
-  const candidates = Array.from(new Set([normalizedEmail, lowerEmail]));
-  const checkedEmails = [];
-  let lastError = null;
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-
-    try {
-      const methods = await auth.fetchSignInMethodsForEmail(candidate);
-      const normalizedMethods = Array.isArray(methods) ? methods : [];
-      checkedEmails.push({ email: candidate, methods: normalizedMethods, source: 'client' });
-
-      if (normalizedMethods.length > 0) {
-        return {
-          exists: true,
-          methods: normalizedMethods,
-          matchedEmail: candidate,
-          checkedEmails
-        };
-      }
-    } catch (error) {
-      lastError = error;
-      console.error('Authentication 이메일 확인 오류:', { email: candidate, error });
-
-      if (error.code === 'auth/invalid-email') {
-        continue;
-      }
-
-      if (error.code === 'auth/network-request-failed') {
-        return { exists: false, methods: [], error, checkedEmails };
-      }
-
-      throw error;
-    }
-  }
-
-  for (const candidate of candidates) {
-    const restResult = await requestAuthUriStatus(candidate);
-    const resolvedMethods = Array.isArray(restResult.methods) ? restResult.methods : [];
-    const resolvedRegistered = Boolean(restResult.registered || resolvedMethods.length > 0);
-
-    checkedEmails.push({
-      email: candidate,
-      methods: resolvedMethods,
-      source: 'rest',
-      registered: resolvedRegistered
-    });
-
-    if (resolvedRegistered) {
-      return {
-        exists: true,
-        methods: resolvedMethods,
-        matchedEmail: candidate,
-        via: 'rest',
-        checkedEmails
-      };
-    }
-
-    if (restResult.error) {
-      lastError = lastError || restResult.error;
-    }
-  }
-
-  try {
-    const fallbackUid = await findUidByEmail(normalizedEmail) || (lowerEmail !== normalizedEmail ? await findUidByEmail(lowerEmail) : null);
-    if (fallbackUid) {
-      return {
-        exists: true,
-        methods: [],
-        matchedEmail: normalizedEmail,
-        via: 'metadata',
-        checkedEmails
-      };
-    }
-  } catch (metaError) {
-    console.error('Authentication 메타데이터 확인 오류:', metaError);
-    lastError = lastError || metaError;
-  }
-
-  if (lastError && lastError.code && lastError.code !== 'auth/invalid-email') {
-    return { exists: false, methods: [], error: lastError, checkedEmails };
-  }
-
-  return { exists: false, methods: [], checkedEmails };
+  return { registered: false, uid: null };
 }
 
 async function ensureDefaultAdminUser() {
@@ -286,18 +332,13 @@ async function ensureDefaultAdminUser() {
       return;
     }
 
-    const { exists: emailExists, error: authError, checkedEmails } = await isEmailRegisteredInAuth(defaultEmail);
-    if (authError) {
-      console.warn('기본 관리자 이메일 확인 중 오류가 발생했습니다:', authError, checkedEmails);
+    const { registered: emailRegistered, uid: resolvedUid } = await verifyEmailRegistration(defaultEmail);
+    if (!emailRegistered) {
+      console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
       return;
     }
 
-    if (!emailExists) {
-      console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail, checkedEmails);
-      return;
-    }
-
-    const uid = await findUidByEmail(defaultEmail);
+    const uid = resolvedUid || await resolveUidByEmail(defaultEmail);
     const now = new Date().toISOString();
     const adminEntry = {
       email: defaultEmail,
@@ -313,6 +354,11 @@ async function ensureDefaultAdminUser() {
     }
 
     await userRef.set(adminEntry);
+    mainUsersData = {
+      ...(mainUsersData || {}),
+      [safeKey]: adminEntry
+    };
+    rebuildUserLookupCaches();
     console.log('기본 관리자 계정이 초기화되었습니다.');
   } catch (error) {
     console.error('기본 관리자 초기화 오류:', error);
@@ -2275,15 +2321,10 @@ async function addNewUser() {
   }
 
   try {
-    const { exists: emailExists, error: authError, checkedEmails } = await isEmailRegisteredInAuth(email);
-    if (authError) {
-      console.error('Firebase Authentication 확인 중 오류:', authError, checkedEmails);
-      alert('Firebase Authentication 확인 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
-      return;
-    }
+    const { registered: emailRegistered, uid: resolvedUid } = await verifyEmailRegistration(email);
 
-    if (!emailExists) {
-      console.warn('Authentication에서 이메일을 찾을 수 없습니다:', email, checkedEmails);
+    if (!emailRegistered) {
+      console.warn('Authentication에서 이메일을 찾을 수 없습니다:', email);
       alert('Firebase Authentication에 등록된 계정이 아닙니다.');
       return;
     }
@@ -2293,7 +2334,10 @@ async function addNewUser() {
     const existingSnap = await userRef.once('value');
     const existingData = existingSnap.val();
 
-    const uid = existingData?.uid || await findUidByEmail(email);
+    let uid = existingData?.uid || resolvedUid;
+    if (!uid) {
+      uid = await resolveUidByEmail(email);
+    }
     const now = new Date().toISOString();
 
     const newEntry = {
@@ -2318,7 +2362,10 @@ async function addNewUser() {
     if (roleSelect) roleSelect.value = '담당자';
 
     const refreshedSnap = await db.ref(userPath).once('value');
-    userData = convertSnapshotToArray(refreshedSnap.val() || {});
+    const refreshedData = refreshedSnap.val() || {};
+    mainUsersData = refreshedData;
+    rebuildUserLookupCaches();
+    userData = convertSnapshotToArray(refreshedData);
     renderUserList();
   } catch (error) {
     console.error('사용자 추가 오류:', error);
