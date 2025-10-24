@@ -80,6 +80,10 @@ let virtualRowHeightMeasured = false;
 let needsVirtualMeasurement = false;
 let pendingVirtualRender = null;
 let virtualTableInitialized = false;
+let virtualTableEventsBound = false;
+let lastRenderedStart = -1;
+let lastRenderedEnd = -1;
+let virtualRowsDirty = true;
 
 // 필터 디바운스 타이머
 let filterDebounceTimer = null;
@@ -1295,6 +1299,8 @@ function initializeVirtualTable() {
     return false;
   }
 
+  bindVirtualTableEvents();
+
   virtualTableBody.innerHTML = '';
   virtualTopSpacer = createVirtualSpacerRow();
   virtualBottomSpacer = createVirtualSpacerRow();
@@ -1340,12 +1346,135 @@ function clearRenderedVirtualRows() {
   while (virtualTopSpacer.nextSibling && virtualTopSpacer.nextSibling !== virtualBottomSpacer) {
     virtualTableBody.removeChild(virtualTopSpacer.nextSibling);
   }
+  resetVirtualRange();
+}
+
+function bindVirtualTableEvents() {
+  if (!virtualTableBody || virtualTableEventsBound) return;
+
+  virtualTableBody.addEventListener('change', handleVirtualTableChange);
+  virtualTableBody.addEventListener('click', handleVirtualBodyClick);
+
+  virtualTableEventsBound = true;
+}
+
+function resetVirtualRange() {
+  lastRenderedStart = -1;
+  lastRenderedEnd = -1;
+  virtualRowsDirty = true;
+}
+
+function handleVirtualTableChange(event) {
+  const target = event.target;
+  if (!target) return;
+
+  if (target.classList.contains('rowSelectChk')) {
+    const uid = target.dataset.uid;
+    if (!uid) return;
+
+    if (target.checked) {
+      selectedRowUids.add(uid);
+    } else {
+      selectedRowUids.delete(uid);
+    }
+    updateSelectAllState();
+    return;
+  }
+
+  const uid = target.dataset.uid;
+  const field = target.dataset.field;
+  if (uid && field) {
+    onCellChange(event);
+  }
+}
+
+function handleVirtualBodyClick(event) {
+  const target = event.target;
+  if (!target) return;
+
+  const actionElement = target.closest('[data-action]');
+  if (!actionElement) return;
+
+  const action = actionElement.dataset.action;
+  if (!action) return;
+
+  if (action === 'open-content-modal') {
+    const uid = actionElement.dataset.uid;
+    const field = actionElement.dataset.contentField;
+    if (!uid || !field) return;
+
+    const row = asData.find(item => item && item.uid === uid);
+    const value = row ? row[field] || '' : '';
+    openContentModalAsWindow(value);
+    return;
+  }
+
+  let uid = actionElement.dataset.uid;
+  if (!uid) {
+    const rowElement = actionElement.closest('tr');
+    if (rowElement) {
+      uid = rowElement.dataset.uid;
+    }
+  }
+
+  switch (action) {
+    case 'api-apply':
+      if (uid) {
+        fetchAndUpdateVesselData(uid);
+      }
+      break;
+    case 'ai-summary':
+      if (uid) {
+        summarizeAndUpdateRow(uid);
+      }
+      break;
+    case 'history': {
+      const project = actionElement.dataset.project || '';
+      showHistoryDataWithFullscreen(project);
+      break;
+    }
+    case 'similar-history':
+      if (uid) {
+        const row = asData.find(item => item && item.uid === uid);
+        if (row) {
+          handleSimilarHistorySearch(row);
+        }
+      }
+      break;
+    case 'imo-search': {
+      const imoInput = actionElement.closest('td')?.querySelector('input[data-field="imo"]');
+      const imoVal = imoInput ? imoInput.value.trim() : '';
+      if (imoVal) {
+        window.open('https://www.vesselfinder.com/vessels/details/' + encodeURIComponent(imoVal), '_blank');
+      }
+      break;
+    }
+    case 'imo-drawing': {
+      const imoInput = actionElement.closest('td')?.querySelector('input[data-field="imo"]');
+      const imoVal = imoInput ? imoInput.value.trim() : '';
+      if (imoVal) {
+        openPdfDrawing(imoVal);
+      }
+      break;
+    }
+    case 'imo-backup': {
+      const imoInput = actionElement.closest('td')?.querySelector('input[data-field="imo"]');
+      const imoVal = imoInput ? imoInput.value.trim() : '';
+      if (imoVal) {
+        openBackupSoftwarePath(imoVal);
+      }
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 function scheduleVirtualRender(forceMeasure = false) {
   if (forceMeasure) {
     virtualRowHeightMeasured = false;
     needsVirtualMeasurement = true;
+    virtualRowsDirty = true;
   }
 
   if (pendingVirtualRender) return;
@@ -1395,6 +1524,12 @@ function renderVirtualRows() {
     startIndex = Math.max(0, endIndex - visibleCount);
   }
 
+  if (!virtualRowsDirty && startIndex === lastRenderedStart && endIndex === lastRenderedEnd) {
+    if (topCell) topCell.style.height = `${startIndex * rowHeight}px`;
+    if (bottomCell) bottomCell.style.height = `${Math.max(totalRows - endIndex, 0) * rowHeight}px`;
+    return;
+  }
+
   const fragment = document.createDocumentFragment();
   for (let i = startIndex; i < endIndex; i++) {
     const tr = createTableRow(filteredData[i], i);
@@ -1406,6 +1541,10 @@ function renderVirtualRows() {
 
   if (topCell) topCell.style.height = `${startIndex * rowHeight}px`;
   if (bottomCell) bottomCell.style.height = `${Math.max(totalRows - endIndex, 0) * rowHeight}px`;
+
+  virtualRowsDirty = false;
+  lastRenderedStart = startIndex;
+  lastRenderedEnd = endIndex;
 }
 
 function measureVirtualRowHeight() {
@@ -1468,6 +1607,7 @@ function updateTable(options = {}) {
     updateElapsedDayCounts();
     updateSidebarList();
 
+    resetVirtualRange();
     scheduleVirtualRender(forceMeasure);
     updateSelectAllState();
     refreshVisibleCheckboxStates();
@@ -3248,7 +3388,9 @@ async function deleteSelectedRows() {
 }
 
 function refreshVisibleCheckboxStates() {
-  document.querySelectorAll('.rowSelectChk').forEach(chk => {
+  if (!virtualTableBody) return;
+
+  virtualTableBody.querySelectorAll('.rowSelectChk').forEach(chk => {
     const uid = chk.dataset.uid;
     chk.checked = selectedRowUids.has(uid);
   });
@@ -3465,14 +3607,7 @@ function createTableCell(row, columnKey) {
     case 'api_apply':
       return createApiApplyCell(row);
     case 'ai_summary':
-      // AI 요약 버튼 직접 생성
-      const aiTd = document.createElement('td');
-      const aiBtn = document.createElement('button');
-      aiBtn.textContent = translations[currentLanguage]["AI 요약"] || "AI 요약";
-      aiBtn.style.cssText = 'background: #6c757d; color: #fff; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;';
-      aiBtn.addEventListener('click', () => summarizeAndUpdateRow(row.uid));
-      aiTd.appendChild(aiBtn);
-      return aiTd;
+      return createAiSummaryCell(row);
     case 'historyCount':
       return createHistoryCountCell(row);
     case 'history':
@@ -3520,14 +3655,6 @@ function createCheckboxCell(row) {
   chk.classList.add('rowSelectChk');
   chk.dataset.uid = row.uid;
   chk.checked = selectedRowUids.has(row.uid);
-  chk.addEventListener('change', (event) => {
-    if (event.target.checked) {
-      selectedRowUids.add(row.uid);
-    } else {
-      selectedRowUids.delete(row.uid);
-    }
-    updateSelectAllState();
-  });
   td.appendChild(chk);
   return td;
 }
@@ -3543,7 +3670,8 @@ function createApiApplyCell(row) {
   btn.style.border = "none";
   btn.style.borderRadius = "4px";
   btn.style.padding = "4px 8px";
-  btn.addEventListener('click', () => fetchAndUpdateVesselData(row.uid));
+  btn.dataset.action = 'api-apply';
+  btn.dataset.uid = row.uid;
   td.appendChild(btn);
   return td;
 }
@@ -3556,7 +3684,8 @@ function createAiSummaryCell(row) {
   btn.style.background = "#6c757d";
   btn.style.color = "#fff";
   btn.style.cursor = "pointer";
-  btn.addEventListener('click', () => summarizeAndUpdateRow(row.uid));
+  btn.dataset.action = 'ai-summary';
+  btn.dataset.uid = row.uid;
   td.appendChild(btn);
   return td;
 }
@@ -3569,7 +3698,8 @@ function createHistoryCell(row) {
   btn.style.background = "#007bff";
   btn.style.color = "#fff";
   btn.style.cursor = "pointer";
-  btn.addEventListener('click', () => showHistoryDataWithFullscreen(row.공번));
+  btn.dataset.action = 'history';
+  btn.dataset.project = row.공번 || '';
   td.appendChild(btn);
   return td;
 }
@@ -3585,7 +3715,8 @@ function createSimilarHistoryCell(row) {
   btn.style.border = "none";
   btn.style.borderRadius = "4px";
   btn.style.padding = "4px 8px";
-  btn.addEventListener('click', () => handleSimilarHistorySearch(row));
+  btn.dataset.action = 'similar-history';
+  btn.dataset.uid = row.uid;
   td.appendChild(btn);
   return td;
 }
@@ -3667,7 +3798,6 @@ function createNormalDelayCell(row) {
   check.dataset.uid = row.uid;
   check.dataset.field = "정상지연";
   check.checked = (row["정상지연"] === "Y");
-  check.addEventListener('change', onCellChange);
   td.appendChild(check);
   return td;
 }
@@ -3696,7 +3826,6 @@ function createDataCell(row, field) {
     inp.value = value;
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
-    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
   } else if (field === 'asType') {
     const sel = document.createElement('select');
@@ -3709,7 +3838,6 @@ function createDataCell(row, field) {
     sel.value = value || '유상';
     sel.dataset.uid = row.uid;
     sel.dataset.field = field;
-    sel.addEventListener('change', onCellChange);
     td.appendChild(sel);
   } else if (field === '동작여부') {
     const sel = document.createElement('select');
@@ -3722,7 +3850,6 @@ function createDataCell(row, field) {
     sel.value = value || '정상';
     sel.dataset.uid = row.uid;
     sel.dataset.field = field;
-    sel.addEventListener('change', onCellChange);
     td.appendChild(sel);
   } else if (field === 'imo') {
     const inp = document.createElement('input');
@@ -3731,7 +3858,6 @@ function createDataCell(row, field) {
     inp.style.width = '55%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
-    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
 
     const linkIcon = document.createElement('span');
@@ -3739,12 +3865,7 @@ function createDataCell(row, field) {
     linkIcon.style.cursor = 'pointer';
     linkIcon.title = '새 창에서 조회';
     linkIcon.classList.add('imo-action-icon');
-    linkIcon.addEventListener('click', () => {
-      const imoVal = inp.value.trim();
-      if (imoVal) {
-        window.open('https://www.vesselfinder.com/vessels/details/' + encodeURIComponent(imoVal), '_blank');
-      }
-    });
+    linkIcon.dataset.action = 'imo-search';
     td.appendChild(linkIcon);
 
     const drawingIcon = document.createElement('span');
@@ -3752,12 +3873,7 @@ function createDataCell(row, field) {
     drawingIcon.style.cursor = 'pointer';
     drawingIcon.title = '도면 경로 복사';
     drawingIcon.classList.add('imo-action-icon');
-    drawingIcon.addEventListener('click', () => {
-      const imoVal = inp.value.trim();
-      if (imoVal) {
-        openPdfDrawing(imoVal);
-      }
-    });
+    drawingIcon.dataset.action = 'imo-drawing';
     td.appendChild(drawingIcon);
 
     const backupIcon = document.createElement('span');
@@ -3765,12 +3881,7 @@ function createDataCell(row, field) {
     backupIcon.style.cursor = 'pointer';
     backupIcon.title = '백업 경로 복사';
     backupIcon.classList.add('imo-action-icon');
-    backupIcon.addEventListener('click', () => {
-      const imoVal = inp.value.trim();
-      if (imoVal) {
-        openBackupSoftwarePath(imoVal);
-      }
-    });
+    backupIcon.dataset.action = 'imo-backup';
     td.appendChild(backupIcon);
   } else if (['조치계획', '접수내용', '조치결과'].includes(field)) {
     const inp = document.createElement('input');
@@ -3780,7 +3891,9 @@ function createDataCell(row, field) {
     inp.readOnly = true;
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
-    td.addEventListener('click', () => openContentModalAsWindow(value));
+    td.dataset.action = 'open-content-modal';
+    td.dataset.uid = row.uid;
+    td.dataset.contentField = field;
     td.appendChild(inp);
   } else if (['api_name', 'api_owner', 'api_manager'].includes(field)) {
     const inp = document.createElement('input');
@@ -3807,7 +3920,6 @@ function createDataCell(row, field) {
     inp.style.width = '95%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
-    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
   } else {
     const inp = document.createElement('input');
@@ -3816,7 +3928,6 @@ function createDataCell(row, field) {
     inp.style.width = '95%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
-    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
   }
   
