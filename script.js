@@ -519,7 +519,6 @@ const translations = {
     "그룹": "그룹",
     "AS 구분": "AS 구분",
     "현 담당": "현 담당",
-    "동작여부": "동작여부",
     "SHIP TYPE": "SHIP TYPE",
     "SHIPYARD": "SHIPYARD",
     "무상": "무상",
@@ -619,7 +618,6 @@ const translations = {
     "그룹": "Group",
     "AS 구분": "AS Type",
     "현 담당": "Current Manager",
-    "동작여부": "Operation Status",
     "SHIP TYPE": "SHIP TYPE",
     "SHIPYARD": "SHIPYARD",
     "전체": "All",
@@ -722,7 +720,6 @@ const translations = {
     "그룹": "组别",
     "AS 구분": "AS类型",
     "현 담당": "当前负责人",
-    "동작여부": "运行状态",
     "SHIP TYPE": "船舶类型",
     "SHIPYARD": "造船厂",
     "무상": "免费",
@@ -824,7 +821,6 @@ const translations = {
     "그룹": "グループ",
     "AS 구분": "AS区分",
     "현 담당": "現担当者",
-    "동작여부": "動作状態",
     "SHIP TYPE": "船舶タイプ",
     "SHIPYARD": "造船所",
     "무상": "無償",
@@ -1877,7 +1873,6 @@ function updateUILanguage() {
     '그룹': ['그룹', 'Group', '组别', 'グループ'],
     'AS 구분': ['AS 구분', 'AS Type', 'AS类型', 'AS区分'],
     '현 담당': ['현 담당', 'Current Manager', '当前负责人', '現担当者'],
-    '동작여부': ['동작여부', 'Operation Status', '运行状态', '動作状態'],
     'SHIP TYPE': ['SHIP TYPE', 'SHIP TYPE', '船舶类型', '船舶タイプ'],
     'SHIPYARD': ['SHIPYARD', 'SHIPYARD', '造船厂', '造船所']
   };
@@ -2995,10 +2990,6 @@ async function loadData(options = {}) {
       if (!('cpuRomVer' in row)) row.cpuRomVer = '';
       if (!('rauRomVer' in row)) row.rauRomVer = '';
 
-      if (row.동작여부 === "정상A" || row.동작여부 === "정상B" || row.동작여부 === "유상정상") {
-        row.동작여부 = "정상";
-      }
-
       row.historyCounts = createEmptyHistoryCounts();
       newRows.push(row);
     });
@@ -3259,7 +3250,7 @@ function addNewRow() {
     uid,
     공번: '', 시스템: '', imo: '', hull: '', project: '', shipName: '', shipowner: '', repMail: '',
     shipType: '', shipyard: '', asType: '유상', delivery: '', warranty: '',
-    prevManager: '', manager: '', 현황: '', 현황번역: '', 동작여부: '정상',
+    prevManager: '', manager: '', 현황: '', 현황번역: '',
     조치계획: '', 접수내용: '', 조치결과: '',
     "AS접수일자": '',
     "기술적종료일": '',
@@ -3513,17 +3504,6 @@ function createTableRow(row, rowIndex = 0) {
       });
     }
   }
-  
-  // 동작여부 셀 강조
-  const activeCell = tr.querySelector('td[data-field="동작여부"]');
-  if (activeCell) {
-    if (row.기술적종료일 && ["부분동작", "동작불가"].includes(row.동작여부)) {
-      activeCell.style.backgroundColor = 'yellow';
-    }
-    if (row.접수내용 && !row.기술적종료일 && row.동작여부 === "정상") {
-      activeCell.style.backgroundColor = 'lightgreen';
-    }
-  }
 
   return tr;
 }
@@ -3570,7 +3550,7 @@ function createTableCell(row, columnKey) {
         'hull', 'project', 'shipName', 'repMail', 'shipType',
         'shipowner', 'shipyard', 'asType',
         'delivery', 'warranty', 'prevManager', 'manager', '현황', '현황번역',
-        '동작여부', '조치계획', '접수내용', '조치결과', 'AS접수일자', '기술적종료일',
+        '조치계획', '접수내용', '조치결과', 'AS접수일자', '기술적종료일',
         '지연 사유', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
       ];
       
@@ -3773,18 +3753,6 @@ function createDataCell(row, field) {
       sel.appendChild(o);
     });
     sel.value = value || '유상';
-    sel.dataset.uid = row.uid;
-    sel.dataset.field = field;
-    td.appendChild(sel);
-  } else if (field === '동작여부') {
-    const sel = document.createElement('select');
-    ['정상', '부분동작', '동작불가'].forEach(op => {
-      const o = document.createElement('option');
-      o.value = op;
-      o.textContent = op;
-      sel.appendChild(o);
-    });
-    sel.value = value || '정상';
     sel.dataset.uid = row.uid;
     sel.dataset.field = field;
     td.appendChild(sel);
@@ -4805,7 +4773,6 @@ function downloadExcel() {
           '현 담당': d.manager,
           현황: d.현황,
           현황번역: d.현황번역,
-          동작여부: d.동작여부,
           조치계획: d.조치계획,
           접수내용: d.접수내용,
           조치결과: d.조치결과,
@@ -4829,7 +4796,7 @@ function downloadExcel() {
       const templateHeaders = [
         '공번', '시스템', 'IMO', 'HULL', 'PROJECT', 'SHIPNAME', 'SHIPOWNER',
         'API_NAME', 'API_OWNER', 'API_MANAGER', '호선 대표메일', 'SHIP TYPE', 'SHIPYARD', 'AS 구분',
-        '인도일', '보증종료일', '전 담당', '현 담당', '현황', '현황번역', '동작여부', '조치계획', '접수내용',
+        '인도일', '보증종료일', '전 담당', '현 담당', '현황', '현황번역', '조치계획', '접수내용',
         '조치결과', 'AS접수건수', 'H/W TYPE', 'SOFTWARE', 'CPU ROM VER', 'RAU ROM VER'
       ];
       const trailingHeaders = ['AS접수일자', '기술적종료일', '정상지연', '지연 사유', '수정일'];
@@ -4947,7 +4914,6 @@ function readExcelFile(file, mode) {
             manager: parseCell(r['현 담당']),
             현황: parseCell(r['현황']),
             현황번역: parseCell(r['현황번역']),
-            동작여부: normalizeOperationStatus(parseCell(r['동작여부']) || '정상'),
             조치계획: parseCell(r['조치계획']),
             접수내용: parseCell(r['접수내용']),
             조치결과: parseCell(r['조치결과']),
@@ -5021,21 +4987,6 @@ function readExcelFile(file, mode) {
   };
   
   reader.readAsArrayBuffer(file);
-}
-
-function normalizeOperationStatus(status) {
-  switch (status) {
-    case '정상A':
-    case '정상B':
-    case '유상정상':
-      return '정상';
-    case '부분동작':
-      return '부분동작';
-    case '동작불가':
-      return '동작불가';
-    default:
-      return '정상';
-  }
 }
 
 function parseCell(v) {

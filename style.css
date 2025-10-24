@@ -1243,7 +1243,6 @@ th[data-field="prevManager"], td[data-field="prevManager"] { min-width: 80px; }
 th[data-field="manager"], td[data-field="manager"] { min-width: 80px; }
 th[data-field="현황"], td[data-field="현황"] { min-width: 300px; }
 th[data-field="현황번역"], td[data-field="현황번역"] { min-width: 300px; }
-th[data-field="동작여부"], td[data-field="동작여부"] { min-width: 120px; }
 th[data-field="조치계획"], td[data-field="조치계획"] { min-width: 180px; }
 th[data-field="접수내용"], td[data-field="접수내용"] { min-width: 180px; }
 th[data-field="조치결과"], td[data-field="조치결과"] { min-width: 180px; }
