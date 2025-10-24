@@ -58,6 +58,7 @@ let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
 let historyCountsByProject = new Map();
 let selectedRowUids = new Set();
+let operationStatusFilter = null;
 
 let mainUsersData = null;
 let legacyUsersData = null;
@@ -443,13 +444,11 @@ const currentYear = new Date().getFullYear();
 const historyYears = Array.from({ length: currentYear - historyStartYear + 1 }, (_, i) => historyStartYear + i);
 const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 
-const DEFAULT_DELIVERY_START = '2020-01-01';
-
 // 기본 테이블 열 정의
 const basicColumns = [
   'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty',
-  'manager', '현황', '현황번역', '동작여부', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
+  'manager', '현황', '현황번역', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
   '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -458,7 +457,7 @@ const allColumns = [
   'checkbox', '공번', '시스템', 'imo', 'api_name', 'api_owner', 'api_manager', 'api_apply',
   'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty', 'prevManager',
-  'manager', '현황', '현황번역', 'ai_summary', '동작여부', '조치계획', '접수내용',
+  'manager', '현황', '현황번역', 'ai_summary', '조치계획', '접수내용',
   '조치결과', 'historyCount', ...historyYearColumns, 'history', 'similarHistory', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -886,30 +885,8 @@ document.addEventListener('DOMContentLoaded', () => {
   ensureDefaultAdminUser();
 });
 
-function initializeDeliveryDateFilters() {
-  const startInput = document.getElementById('filterDeliveryStart');
-  const endInput = document.getElementById('filterDeliveryEnd');
-  if (!startInput || !endInput) return;
-
-  const todayStr = toYMD(new Date());
-
-  if (!startInput.value) {
-    startInput.value = DEFAULT_DELIVERY_START;
-  }
-
-  if (!endInput.value) {
-    endInput.value = todayStr;
-  }
-
-  const onDateFilterChange = () => applyFilters();
-  startInput.addEventListener('change', onDateFilterChange);
-  endInput.addEventListener('change', onDateFilterChange);
-}
-
 // 모든 이벤트 리스너 등록 함수
 function registerEventListeners() {
-  initializeDeliveryDateFilters();
-
   // 사이드바 관련
   document.getElementById('btnManager').addEventListener('click', () => switchSideMode('manager'));
   document.getElementById('btnOwner').addEventListener('click', () => switchSideMode('owner'));
@@ -1092,7 +1069,7 @@ function setupFilterEventListeners() {
   ];
 
   const filterSelects = [
-    'filterAsType', 'filterActive'
+    'filterAsType'
   ];
   
   // 텍스트 입력 필터
@@ -1132,18 +1109,12 @@ function setupOperationStatusFilters() {
 
 // 동작여부별 필터링
 function filterByOperationStatus(status) {
-  // 현재 선택된 동작여부와 같으면 해제, 다르면 적용
-  const currentStatus = document.getElementById('filterActive').value;
-  
-  if (currentStatus === status) {
-    // 같은 상태를 다시 클릭하면 필터 해제
-    document.getElementById('filterActive').value = '';
+  if (operationStatusFilter === status) {
+    operationStatusFilter = null;
   } else {
-    // 다른 상태를 클릭하면 해당 상태로 필터 설정
-    document.getElementById('filterActive').value = status;
+    operationStatusFilter = status;
   }
-  
-  // 필터 적용 (기존 필터 조건 유지)
+
   applyFilters();
 }
 
@@ -1156,44 +1127,6 @@ function handleFilterChange() {
   filterDebounceTimer = setTimeout(() => {
     applyFilters();
   }, 300); // 300ms 디바운스
-}
-
-function parseDateForFilter(value) {
-  if (!value && value !== 0) return null;
-
-  if (value instanceof Date) {
-    const normalized = new Date(value.getFullYear(), value.getMonth(), value.getDate());
-    return isNaN(normalized.getTime()) ? null : normalized;
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-    const dateFromSerial = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
-    return isNaN(dateFromSerial.getTime())
-      ? null
-      : new Date(dateFromSerial.getFullYear(), dateFromSerial.getMonth(), dateFromSerial.getDate());
-  }
-
-  let str = String(value).trim();
-  if (!str || str === '#N/A') return null;
-
-  str = str.replace(/[./]/g, '-').replace(/\//g, '-');
-
-  if (/^\d{8}$/.test(str)) {
-    str = `${str.slice(0, 4)}-${str.slice(4, 6)}-${str.slice(6, 8)}`;
-  }
-
-  const simpleMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (simpleMatch) {
-    const [, y, m, d] = simpleMatch;
-    const dateObj = new Date(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T00:00:00`);
-    return isNaN(dateObj.getTime()) ? null : dateObj;
-  }
-
-  const parsed = new Date(str.includes('T') ? str : `${str}T00:00:00`);
-  if (isNaN(parsed.getTime())) return null;
-
-  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
 }
 
 // applyFilters 함수 수정 - 경과일 필터 추가
@@ -1217,22 +1150,13 @@ async function applyFilters(options = {}) {
     repMail: document.getElementById('filterRepMail').value.toLowerCase().trim(),
     asType: document.getElementById('filterAsType').value,
     manager: document.getElementById('filterManager').value.toLowerCase().trim(),
-    active: document.getElementById('filterActive').value,
     shipType: document.getElementById('filterShipType').value.toLowerCase().trim(),
     shipyard: document.getElementById('filterShipyard').value.toLowerCase().trim()
   };
 
-  const deliveryStartInput = document.getElementById('filterDeliveryStart');
-  const deliveryEndInput = document.getElementById('filterDeliveryEnd');
-  const deliveryStartDate = deliveryStartInput ? parseDateForFilter(deliveryStartInput.value) : null;
-  const deliveryEndDate = deliveryEndInput ? parseDateForFilter(deliveryEndInput.value) : null;
-  const deliveryStartTime = deliveryStartDate ? deliveryStartDate.getTime() : null;
-  const deliveryEndTime = deliveryEndDate ? deliveryEndDate.getTime() : null;
-
   const elapsedDayFilter = window.elapsedDayFilter || null;
 
-  const hasDateFilter = deliveryStartTime !== null || deliveryEndTime !== null;
-  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null || hasDateFilter;
+  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null || operationStatusFilter !== null;
 
   if (hasActiveFilter && hasMoreData && !skipEnsureAll) {
     await ensureAllDataLoaded();
@@ -1289,7 +1213,7 @@ async function applyFilters(options = {}) {
         return false;
       }
 
-      if (filters.active && row.동작여부 !== filters.active) {
+      if (operationStatusFilter && row.동작여부 !== operationStatusFilter) {
         return false;
       }
 
@@ -1299,20 +1223,6 @@ async function applyFilters(options = {}) {
 
       if (filters.shipyard && !String(row.shipyard || '').toLowerCase().includes(filters.shipyard)) {
         return false;
-      }
-
-      if (hasDateFilter) {
-        const deliveryDate = parseDateForFilter(row.delivery);
-        if (!deliveryDate) return false;
-
-        const deliveryTime = deliveryDate.getTime();
-        if (deliveryStartTime !== null && deliveryTime < deliveryStartTime) {
-          return false;
-        }
-
-        if (deliveryEndTime !== null && deliveryTime > deliveryEndTime) {
-          return false;
-        }
       }
 
       return true;
@@ -1586,14 +1496,10 @@ function clearAllFilters() {
   document.getElementById('filterRepMail').value = '';
   document.getElementById('filterAsType').value = '';
   document.getElementById('filterManager').value = '';
-  document.getElementById('filterActive').value = '';
   document.getElementById('filterShipType').value = '';
   document.getElementById('filterShipyard').value = '';
-  const deliveryStartInput = document.getElementById('filterDeliveryStart');
-  const deliveryEndInput = document.getElementById('filterDeliveryEnd');
-  if (deliveryStartInput) deliveryStartInput.value = '';
-  if (deliveryEndInput) deliveryEndInput.value = '';
 
+  operationStatusFilter = null;
   // 경과일 필터도 초기화
   window.elapsedDayFilter = null;
 }
@@ -1706,7 +1612,6 @@ function renderTableHeaders() {
     '현황': { field: '현황', text: '현황' },
     '현황번역': { field: '현황번역', text: '현황 번역' },
     'ai_summary': { field: null, text: 'AI 요약', isAI: true },
-    '동작여부': { field: '동작여부', text: '동작여부' },
     '조치계획': { field: '조치계획', text: '조치계획' },
     '접수내용': { field: '접수내용', text: '접수내용' },
     '조치결과': { field: '조치결과', text: '조치결과' },
@@ -1975,18 +1880,7 @@ function updateSelectOptions(langData) {
       else if (value === "위탁") option.textContent = langData["위탁"] || "위탁";
     });
   }
-  
-  const activeFilter = document.getElementById('filterActive');
-  if (activeFilter) {
-    Array.from(activeFilter.options).forEach(option => {
-      const value = option.value;
-      if (!value) option.textContent = langData["전체"] || "전체";
-      else if (value === "정상") option.textContent = langData["정상"] || "정상";
-      else if (value === "부분동작") option.textContent = langData["부분동작"] || "부분동작";
-      else if (value === "동작불가") option.textContent = langData["동작불가"] || "동작불가";
-    });
-  }
-  
+
 }
 
 /** ==================================
@@ -3441,20 +3335,19 @@ function updateStatusCounts(counts) {
   document.getElementById('count정상').textContent = counts.정상 || 0;
   document.getElementById('count부분동작').textContent = counts.부분동작 || 0;
   document.getElementById('count동작불가').textContent = counts.동작불가 || 0;
-  
+
   // 현재 선택된 동작여부 하이라이트
-  const currentStatus = document.getElementById('filterActive').value;
   document.querySelectorAll('.status-card').forEach((card, index) => {
     if (index < 3) { // 처음 3개가 동작여부 카드
       card.classList.remove('active-filter');
     }
   });
-  
-  if (currentStatus === '정상') {
+
+  if (operationStatusFilter === '정상') {
     document.getElementById('count정상').parentElement.classList.add('active-filter');
-  } else if (currentStatus === '부분동작') {
+  } else if (operationStatusFilter === '부분동작') {
     document.getElementById('count부분동작').parentElement.classList.add('active-filter');
-  } else if (currentStatus === '동작불가') {
+  } else if (operationStatusFilter === '동작불가') {
     document.getElementById('count동작불가').parentElement.classList.add('active-filter');
   }
 }
