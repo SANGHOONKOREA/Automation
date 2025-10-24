@@ -58,15 +58,14 @@ let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
 let historyCountsByProject = new Map();
 let selectedRowUids = new Set();
-let operationStatusFilter = null;
 
 let mainUsersData = null;
 let legacyUsersData = null;
 let userRecords = {};
 let userMetaCache = null;
 
-const PAGE_SIZE = 250;
-const LOAD_MORE_OFFSET = 400;
+const PAGE_SIZE = 10000; // Increased for better performance with large datasets
+const LOAD_MORE_OFFSET = 800;
 const VIRTUAL_BUFFER_ROWS = 12;
 let lastLoadedKey = null;
 let hasMoreData = true;
@@ -1061,8 +1060,7 @@ function registerEventListeners() {
   initializeVirtualTable();
 }
 
-// 동작여부 상태 카드 클릭 이벤트 리스너 추가
-setupOperationStatusFilters();
+// Operation status filters removed for performance optimization
 
 // 개선된 필터 이벤트 리스너 설정
 function setupFilterEventListeners() {
@@ -1093,34 +1091,7 @@ function setupFilterEventListeners() {
   });
 }
 
-// 동작여부 상태 필터 설정
-function setupOperationStatusFilters() {
-  // 정상 카드 클릭
-  document.getElementById('count정상').parentElement.addEventListener('click', () => {
-    filterByOperationStatus('정상');
-  });
-  
-  // 부분동작 카드 클릭
-  document.getElementById('count부분동작').parentElement.addEventListener('click', () => {
-    filterByOperationStatus('부분동작');
-  });
-  
-  // 동작불가 카드 클릭
-  document.getElementById('count동작불가').parentElement.addEventListener('click', () => {
-    filterByOperationStatus('동작불가');
-  });
-}
-
-// 동작여부별 필터링
-function filterByOperationStatus(status) {
-  if (operationStatusFilter === status) {
-    operationStatusFilter = null;
-  } else {
-    operationStatusFilter = status;
-  }
-
-  applyFilters();
-}
+// Operation status filters removed for performance optimization
 
 // 필터 변경 핸들러 - 디바운스 적용
 function handleFilterChange() {
@@ -1160,7 +1131,7 @@ async function applyFilters(options = {}) {
 
   const elapsedDayFilter = window.elapsedDayFilter || null;
 
-  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null || operationStatusFilter !== null;
+  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null;
 
   if (hasActiveFilter && hasMoreData && !skipEnsureAll) {
     await ensureAllDataLoaded();
@@ -1214,10 +1185,6 @@ async function applyFilters(options = {}) {
       }
 
       if (filters.manager && !String(row.manager || '').toLowerCase().includes(filters.manager)) {
-        return false;
-      }
-
-      if (operationStatusFilter && row.동작여부 !== operationStatusFilter) {
         return false;
       }
 
@@ -1596,14 +1563,7 @@ function updateTable(options = {}) {
 
     initializeVirtualTable();
 
-    const counts = { 정상: 0, 부분동작: 0, 동작불가: 0 };
-    filteredData.forEach(row => {
-      if (counts.hasOwnProperty(row.동작여부)) {
-        counts[row.동작여부]++;
-      }
-    });
-
-    updateStatusCounts(counts);
+    // Operation status counting removed for performance optimization
     updateElapsedDayCounts();
     updateSidebarList();
 
@@ -1639,7 +1599,6 @@ function clearAllFilters() {
   document.getElementById('filterShipType').value = '';
   document.getElementById('filterShipyard').value = '';
 
-  operationStatusFilter = null;
   // 경과일 필터도 초기화
   window.elapsedDayFilter = null;
 }
@@ -1660,24 +1619,17 @@ async function loadAdminPassword() {
   }
 }
 
-// 관리자 비밀번호 확인 함수
+// 관리자 권한 확인 함수 (역할 기반)
 function checkAdminPassword(callback) {
-  if (adminAuthorized) {
-    callback();
+  if (!currentUser) {
+    alert("로그인이 필요합니다.");
     return;
   }
 
-  const passwordInput = prompt("관리자 비밀번호를 입력하세요:");
-  if (passwordInput === null) return;
-
-  if (passwordInput === adminPassword) {
-    adminAuthorized = true;
-    setTimeout(() => {
-      adminAuthorized = false;
-    }, 5 * 60 * 1000);
+  if (currentUser.role === '관리자') {
     callback();
   } else {
-    alert("관리자 비밀번호가 올바르지 않습니다.");
+    alert("관리자 권한이 필요합니다.");
   }
 }
 
@@ -3085,12 +3037,14 @@ async function loadData(options = {}) {
 }
 
 async function ensureAllDataLoaded() {
+  // Optimized: Load all remaining data in larger chunks
   while (hasMoreData) {
     const loaded = await loadData({ silent: true });
     if (!loaded) {
       break;
     }
   }
+  console.log(`Total data loaded: ${asData.length} rows`);
 }
 
 async function initializeData() {
@@ -3472,26 +3426,9 @@ function handleTableClick(e) {
   }
 }
 
-// 상태 카드 업데이트 시 선택 상태 표시
+// Operation status counts removed for performance optimization
 function updateStatusCounts(counts) {
-  document.getElementById('count정상').textContent = counts.정상 || 0;
-  document.getElementById('count부분동작').textContent = counts.부분동작 || 0;
-  document.getElementById('count동작불가').textContent = counts.동작불가 || 0;
-
-  // 현재 선택된 동작여부 하이라이트
-  document.querySelectorAll('.status-card').forEach((card, index) => {
-    if (index < 3) { // 처음 3개가 동작여부 카드
-      card.classList.remove('active-filter');
-    }
-  });
-
-  if (operationStatusFilter === '정상') {
-    document.getElementById('count정상').parentElement.classList.add('active-filter');
-  } else if (operationStatusFilter === '부분동작') {
-    document.getElementById('count부분동작').parentElement.classList.add('active-filter');
-  } else if (operationStatusFilter === '동작불가') {
-    document.getElementById('count동작불가').parentElement.classList.add('active-filter');
-  }
+  // Operation status display removed
 }
 
 

@@ -3481,29 +3481,7 @@ td[data-field="imo"] .imo-action-icon[title="백업 경로 복사"]:hover {
   to { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
 }
 
-/* 동작여부 상태 카드 호버 효과 추가 */
-.status-card:nth-child(1):hover,
-.status-card:nth-child(2):hover,
-.status-card:nth-child(3):hover {
-  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-  border-color: var(--primary-color);
-  transform: translateY(-4px);
-  box-shadow: 0 8px 20px rgba(49, 91, 138, 0.3);
-}
-
-/* 동작여부별 개별 색상 */
-.status-card:nth-child(1) .count { /* 정상 */
-  color: var(--success-color);
-}
-
-.status-card:nth-child(2) .count { /* 부분동작 */
-  color: var(--warning-color);
-}
-
-.status-card:nth-child(3) .count { /* 동작불가 */
-  color: var(--danger-color);
-}
-
+/* Operation status cards removed for performance optimization */
 
 /* =================================
    추가 유틸리티 클래스
