@@ -589,120 +589,6 @@ kbd {
 }
 
 /* =================================
-   상태 집계 카드 스타일 - 개선된 경과일 포함
-   ================================= */
-/* 기존 상태 카드 스타일을 더 컴팩트하게 수정 */
-.status-summary {
-  display: flex; 
-  gap: 8px; /* 기존: 12px */
-  padding: 10px 15px; /* 기존: 15px 20px */
-  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
-  border-bottom: 1px solid var(--border-color);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
-  flex-wrap: wrap;
-  /* 높이 제한 추가 */
-  min-height: auto;
-  max-height: 80px; /* 최대 높이 제한 */
-}
-
-.status-card {
-  background: #fff; 
-  border: 2px solid transparent; 
-  border-radius: 6px; /* 기존: 8px */
-  padding: 8px 12px; /* 기존: 12px 16px */
-  flex: 1; 
-  text-align: center;
-  transition: all 0.3s ease;
-  cursor: pointer;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1); /* 기존: 0 2px 8px */
-  min-width: 80px; /* 기존: 120px */
-  /* 높이 제한 */
-  min-height: 50px;
-  max-height: 60px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.status-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px; /* 기존: 4px */
-  background: var(--primary-color);
-  transform: scaleX(0);
-  transition: transform 0.3s ease;
-}
-
-.status-card:hover::before {
-  transform: scaleX(1);
-}
-
-.status-card:hover {
-  transform: translateY(-2px); /* 기존: -4px */
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15); /* 기존: 0 8px 25px */
-  border-color: var(--primary-color);
-}
-
-.status-card h3 { 
-  font-size: 0.75em; /* 기존: 0.9em */
-  margin-bottom: 4px; /* 기존: 8px */
-  color: #666;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px; /* 기존: 0.5px */
-  line-height: 1.2;
-}
-
-.status-card .count { 
-  font-weight: 700; 
-  font-size: 1.1em; /* 기존: 1.4em */
-  color: var(--primary-color);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  line-height: 1;
-  margin: 0;
-}
-
-/* 경과일 카드 특별 스타일 축소 */
-.elapsed-card {
-  background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-  border-color: #ffc107;
-  cursor: pointer;
-}
-
-.elapsed-card:hover {
-  border-color: #e0a800;
-  transform: translateY(-3px); /* 기존: -6px */
-  box-shadow: 0 6px 20px rgba(255, 193, 7, 0.3); /* 기존: 0 10px 30px */
-}
-
-.elapsed-card .count {
-  color: #e67e22;
-  font-weight: 800;
-}
-
-.elapsed-card h3 {
-  color: #d68910;
-}
-
-/* 30일, 60일, 90일 경과 카드 개별 색상 유지 */
-#count30Days.count {
-  color: #f39c12;
-}
-
-#count60Days.count {
-  color: #e67e22;
-}
-
-#count90Days.count {
-  color: #d35400;
-}
-
-/* =================================
    필터 영역 스타일 - 개선된 필터 추가
    ================================= */
 .filters {
@@ -3076,17 +2962,6 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
     width: 100%;
   }
   
-  .status-summary {
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-  }
-  
-  .status-card {
-    min-width: calc(50% - 4px);
-    flex: 0 0 calc(50% - 4px);
-  }
-  
   .bottom-controls {
     gap: 8px;
     justify-content: center;
@@ -3143,11 +3018,6 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
     font-size: 1.3em;
   }
   
-  .status-card {
-    min-width: 100%;
-    flex: 0 0 100%;
-  }
-  
   .modal-content {
     margin: 2% auto !important;
     padding: 20px !important;
@@ -3197,8 +3067,7 @@ th[data-field="rauRomVer"], td[data-field="rauRomVer"] { min-width: 120px; }
   .bottom-controls,
   .modal-background,
   .language-selector,
-  .view-toggle,
-  .status-summary {
+  .view-toggle {
     display: none !important;
   }
   
@@ -3479,29 +3348,6 @@ td[data-field="imo"] .imo-action-icon[title="백업 경로 복사"]:hover {
 @keyframes fadeOut {
   from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   to { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
-}
-
-/* 동작여부 상태 카드 호버 효과 추가 */
-.status-card:nth-child(1):hover,
-.status-card:nth-child(2):hover,
-.status-card:nth-child(3):hover {
-  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-  border-color: var(--primary-color);
-  transform: translateY(-4px);
-  box-shadow: 0 8px 20px rgba(49, 91, 138, 0.3);
-}
-
-/* 동작여부별 개별 색상 */
-.status-card:nth-child(1) .count { /* 정상 */
-  color: var(--success-color);
-}
-
-.status-card:nth-child(2) .count { /* 부분동작 */
-  color: var(--warning-color);
-}
-
-.status-card:nth-child(3) .count { /* 동작불가 */
-  color: var(--danger-color);
 }
 
 

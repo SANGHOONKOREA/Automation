@@ -58,19 +58,13 @@ let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
 let historyCountsByProject = new Map();
 let selectedRowUids = new Set();
-let operationStatusFilter = null;
-
 let mainUsersData = null;
 let legacyUsersData = null;
 let userRecords = {};
 let userMetaCache = null;
 
-const PAGE_SIZE = 250;
-const LOAD_MORE_OFFSET = 400;
 const VIRTUAL_BUFFER_ROWS = 12;
-let lastLoadedKey = null;
-let hasMoreData = true;
-let isLoadingPage = false;
+let isDataLoading = false;
 let tableWrapper = null;
 let virtualTableBody = null;
 let virtualTopSpacer = null;
@@ -1055,14 +1049,8 @@ function registerEventListeners() {
     });
   });
   
-  // 경과일 상태 카드 클릭 이벤트 리스너
-  setupElapsedDayFilters();
-
   initializeVirtualTable();
 }
-
-// 동작여부 상태 카드 클릭 이벤트 리스너 추가
-setupOperationStatusFilters();
 
 // 개선된 필터 이벤트 리스너 설정
 function setupFilterEventListeners() {
@@ -1093,35 +1081,6 @@ function setupFilterEventListeners() {
   });
 }
 
-// 동작여부 상태 필터 설정
-function setupOperationStatusFilters() {
-  // 정상 카드 클릭
-  document.getElementById('count정상').parentElement.addEventListener('click', () => {
-    filterByOperationStatus('정상');
-  });
-  
-  // 부분동작 카드 클릭
-  document.getElementById('count부분동작').parentElement.addEventListener('click', () => {
-    filterByOperationStatus('부분동작');
-  });
-  
-  // 동작불가 카드 클릭
-  document.getElementById('count동작불가').parentElement.addEventListener('click', () => {
-    filterByOperationStatus('동작불가');
-  });
-}
-
-// 동작여부별 필터링
-function filterByOperationStatus(status) {
-  if (operationStatusFilter === status) {
-    operationStatusFilter = null;
-  } else {
-    operationStatusFilter = status;
-  }
-
-  applyFilters();
-}
-
 // 필터 변경 핸들러 - 디바운스 적용
 function handleFilterChange() {
   if (filterDebounceTimer) {
@@ -1133,9 +1092,8 @@ function handleFilterChange() {
   }, 300); // 300ms 디바운스
 }
 
-// applyFilters 함수 수정 - 경과일 필터 추가
 async function applyFilters(options = {}) {
-  const { skipEnsureAll = false, preserveScroll = false, forceMeasure = false } = options;
+  const { preserveScroll = false, forceMeasure = false } = options;
 
   if (asData.length === 0) {
     filteredData = [];
@@ -1158,13 +1116,7 @@ async function applyFilters(options = {}) {
     shipyard: document.getElementById('filterShipyard').value.toLowerCase().trim()
   };
 
-  const elapsedDayFilter = window.elapsedDayFilter || null;
-
-  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null || operationStatusFilter !== null;
-
-  if (hasActiveFilter && hasMoreData && !skipEnsureAll) {
-    await ensureAllDataLoaded();
-  }
+  const hasActiveFilter = Object.values(filters).some(val => val !== '');
 
   const sourceData = asData;
 
@@ -1176,18 +1128,6 @@ async function applyFilters(options = {}) {
 
       const hasValidData = row.공번 || row.시스템 || row.imo || row.hull || row.project || row.shipName || row.manager || row.shipowner;
       if (!hasValidData) return false;
-
-      if (elapsedDayFilter !== null) {
-        if (row["기술적종료일"]) return false;
-        if (!row["AS접수일자"]) return false;
-
-        const today = new Date();
-        const asDate = new Date(row["AS접수일자"] + "T00:00");
-        if (isNaN(asDate.getTime())) return false;
-
-        const diffDays = Math.floor((today - asDate) / (1000 * 3600 * 24));
-        if (diffDays < elapsedDayFilter) return false;
-      }
 
       if (filters.imo && !String(row.imo || '').toLowerCase().includes(filters.imo)) {
         return false;
@@ -1214,10 +1154,6 @@ async function applyFilters(options = {}) {
       }
 
       if (filters.manager && !String(row.manager || '').toLowerCase().includes(filters.manager)) {
-        return false;
-      }
-
-      if (operationStatusFilter && row.동작여부 !== operationStatusFilter) {
         return false;
       }
 
@@ -1563,25 +1499,10 @@ function measureVirtualRowHeight() {
 
 function handleVirtualScroll() {
   scheduleVirtualRender();
-  maybeLoadMoreData();
 }
 
 function handleVirtualResize() {
   scheduleVirtualRender(true);
-}
-
-function maybeLoadMoreData() {
-  if (!tableWrapper || !hasMoreData || isLoadingPage) return;
-  const distanceToBottom = tableWrapper.scrollHeight - (tableWrapper.scrollTop + tableWrapper.clientHeight);
-  if (distanceToBottom > LOAD_MORE_OFFSET) return;
-
-  loadData({ silent: true }).then(async loaded => {
-    if (loaded > 0) {
-      await applyFilters({ skipEnsureAll: true, preserveScroll: true });
-    }
-  }).catch(error => {
-    console.error('추가 데이터 로드 실패:', error);
-  });
 }
 
 // 테이블 업데이트 함수 - 가상 스크롤 적용
@@ -1596,15 +1517,6 @@ function updateTable(options = {}) {
 
     initializeVirtualTable();
 
-    const counts = { 정상: 0, 부분동작: 0, 동작불가: 0 };
-    filteredData.forEach(row => {
-      if (counts.hasOwnProperty(row.동작여부)) {
-        counts[row.동작여부]++;
-      }
-    });
-
-    updateStatusCounts(counts);
-    updateElapsedDayCounts();
     updateSidebarList();
 
     resetVirtualRange();
@@ -1623,8 +1535,7 @@ async function loadAllData() {
     return;
   }
 
-  await ensureAllDataLoaded();
-  await applyFilters({ skipEnsureAll: true, forceMeasure: true });
+  await applyFilters({ forceMeasure: true });
 }
 
 // 전체조회 버튼 함수도 수정
@@ -1638,10 +1549,6 @@ function clearAllFilters() {
   document.getElementById('filterManager').value = '';
   document.getElementById('filterShipType').value = '';
   document.getElementById('filterShipyard').value = '';
-
-  operationStatusFilter = null;
-  // 경과일 필터도 초기화
-  window.elapsedDayFilter = null;
 }
 
 // 관리자 비밀번호 로드
@@ -1693,32 +1600,6 @@ function switchTableView(extended) {
 
   // 현재 필터링된 데이터로 테이블 다시 렌더링
   updateTable({ forceMeasure: true });
-}
-
-// 경과일 필터 설정
-function setupElapsedDayFilters() {
-  document.getElementById('count30Days').parentElement.addEventListener('click', () => filterByElapsedDays(30));
-  document.getElementById('count60Days').parentElement.addEventListener('click', () => filterByElapsedDays(60));
-  document.getElementById('count90Days').parentElement.addEventListener('click', () => filterByElapsedDays(90));
-}
-
-// 경과일별 필터링
-function filterByElapsedDays(days) {
-  // 경과일 필터 상태 관리를 위한 전역 변수 추가
-  if (!window.elapsedDayFilter) {
-    window.elapsedDayFilter = null;
-  }
-  
-  // 같은 경과일을 다시 클릭하면 해제
-  if (window.elapsedDayFilter === days) {
-    window.elapsedDayFilter = null;
-    applyFilters();
-    return;
-  }
-  
-  // 새로운 경과일 필터 설정
-  window.elapsedDayFilter = days;
-  applyFilters();
 }
 
 // 테이블 헤더 렌더링
@@ -1893,26 +1774,6 @@ function updateUILanguage() {
     
     connectionStatus.textContent = `${langData["연결 상태"] || "연결 상태"}: ${translatedStatus}`;
   }
-  
-  // 상태 카드
-  const statusCards = {
-    '정상': ['정상', 'Normal', '正常', '正常'],
-    '부분동작': ['부분동작', 'Partial Operation', '部分运行', '部分動作'],
-    '동작불가': ['동작불가', 'Inoperable', '无法运行', '動作不可'],
-    '30일경과': ['30일경과', '30 Days+', '30天+', '30日+'],
-    '60일경과': ['60일경과', '60 Days+', '60天+', '60日+'],
-    '90일경과': ['90일경과', '90 Days+', '90天+', '90日+']
-  };
-  
-  document.querySelectorAll('.status-card h3').forEach(el => {
-    const currentText = el.textContent.trim();
-    for (const [koKey, variations] of Object.entries(statusCards)) {
-      if (variations.includes(currentText)) {
-        el.textContent = langData[koKey] || koKey;
-        break;
-      }
-    }
-  });
   
   // 필터 레이블
   const labelMappings = {
@@ -2961,13 +2822,11 @@ function assignHistoryCountsToRows(countMap = new Map(), rows = asData) {
 async function loadData(options = {}) {
   const { reset = false, silent = false } = options;
 
-  if (isLoadingPage) {
+  if (isDataLoading) {
     return 0;
   }
 
   if (reset) {
-    lastLoadedKey = null;
-    hasMoreData = true;
     asData = [];
     filteredData = [];
     selectedRowUids.clear();
@@ -2983,34 +2842,20 @@ async function loadData(options = {}) {
     }
   }
 
-  if (!hasMoreData) {
-    return 0;
-  }
-
-  isLoadingPage = true;
+  isDataLoading = true;
 
   try {
-    let query = db.ref(asPath).orderByKey();
-    const canUseStartAfter = typeof query.startAfter === 'function';
-
-    if (lastLoadedKey) {
-      query = canUseStartAfter ? query.startAfter(lastLoadedKey) : query.startAt(lastLoadedKey);
-    }
-
-    const fetchLimit = PAGE_SIZE + (lastLoadedKey && !canUseStartAfter ? 1 : 0);
-    query = query.limitToFirst(fetchLimit);
-
-    const snapshot = await query.once('value');
+    const snapshot = await db.ref(asPath).once('value');
     const rawValue = snapshot.val() || {};
-    let entries = Object.entries(rawValue);
-    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-
-    if (lastLoadedKey && !canUseStartAfter) {
-      entries = entries.filter(([key]) => key !== lastLoadedKey);
-    }
+    const entries = Object.entries(rawValue).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 
     if (entries.length === 0) {
-      hasMoreData = false;
+      asData = [];
+      filteredData = [];
+      updateSidebarList();
+      if (!silent) {
+        await applyFilters({ forceMeasure: true });
+      }
       return 0;
     }
 
@@ -3051,28 +2896,31 @@ async function loadData(options = {}) {
       newRows.push(row);
     });
 
-    if (newRows.length === 0) {
-      if (entries.length < fetchLimit) {
-        hasMoreData = false;
-      }
-      return 0;
-    }
-
-    asData = asData.concat(newRows);
-    lastLoadedKey = entries[entries.length - 1][0];
-
-    if (entries.length < fetchLimit) {
-      hasMoreData = false;
+    if (reset || asData.length === 0) {
+      asData = newRows;
+    } else {
+      const merged = new Map();
+      asData.forEach(row => {
+        if (row && row.uid) {
+          merged.set(row.uid, row);
+        }
+      });
+      newRows.forEach(row => {
+        if (row && row.uid) {
+          merged.set(row.uid, row);
+        }
+      });
+      asData = Array.from(merged.values());
     }
 
     if (historyCountsByProject && historyCountsByProject.size > 0) {
-      assignHistoryCountsToRows(historyCountsByProject, newRows);
+      assignHistoryCountsToRows(historyCountsByProject, asData);
     }
 
     updateSidebarList();
 
     if (!silent) {
-      await applyFilters({ skipEnsureAll: true, preserveScroll: true });
+      await applyFilters({ forceMeasure: reset });
     }
 
     return newRows.length;
@@ -3080,16 +2928,7 @@ async function loadData(options = {}) {
     console.error('데이터 로드 오류:', error);
     throw error;
   } finally {
-    isLoadingPage = false;
-  }
-}
-
-async function ensureAllDataLoaded() {
-  while (hasMoreData) {
-    const loaded = await loadData({ silent: true });
-    if (!loaded) {
-      break;
-    }
+    isDataLoading = false;
   }
 }
 
@@ -3098,7 +2937,7 @@ async function initializeData() {
     await loadData({ reset: true, silent: true });
     await loadHistoryCounts();
     loadHistoryEmbeddingIndex().catch(err => console.error('히스토리 임베딩 사전 로드 오류:', err));
-    await applyFilters({ skipEnsureAll: true, forceMeasure: true });
+    await applyFilters({ forceMeasure: true });
   } catch (error) {
     console.error('초기 데이터 로드 오류:', error);
   }
@@ -3194,7 +3033,6 @@ function onCellChange(e) {
   
   if (field === "정상지연" || field === "AS접수일자" || field === "기술적종료일") {
     updateElapsedDaysForRow(e.target.closest('tr'), row);
-    updateElapsedDayCounts();
   }
 }
 
@@ -3472,67 +3310,6 @@ function handleTableClick(e) {
   }
 }
 
-// 상태 카드 업데이트 시 선택 상태 표시
-function updateStatusCounts(counts) {
-  document.getElementById('count정상').textContent = counts.정상 || 0;
-  document.getElementById('count부분동작').textContent = counts.부분동작 || 0;
-  document.getElementById('count동작불가').textContent = counts.동작불가 || 0;
-
-  // 현재 선택된 동작여부 하이라이트
-  document.querySelectorAll('.status-card').forEach((card, index) => {
-    if (index < 3) { // 처음 3개가 동작여부 카드
-      card.classList.remove('active-filter');
-    }
-  });
-
-  if (operationStatusFilter === '정상') {
-    document.getElementById('count정상').parentElement.classList.add('active-filter');
-  } else if (operationStatusFilter === '부분동작') {
-    document.getElementById('count부분동작').parentElement.classList.add('active-filter');
-  } else if (operationStatusFilter === '동작불가') {
-    document.getElementById('count동작불가').parentElement.classList.add('active-filter');
-  }
-}
-
-
-// 경과일 카운트 업데이트 시 선택 상태 표시
-function updateElapsedDayCounts() {
-  const today = new Date();
-  let count30Days = 0, count60Days = 0, count90Days = 0;
-  
-  const dataToCount = filteredData.length > 0 ? filteredData : [];
-  
-  dataToCount.forEach(row => {
-    if (row["기술적종료일"]) return;
-    if (!row["AS접수일자"]) return;
-    
-    const asDate = new Date(row["AS접수일자"] + "T00:00");
-    if (isNaN(asDate.getTime())) return;
-    
-    const diffDays = Math.floor((today - asDate) / (1000 * 3600 * 24));
-    
-    if (diffDays >= 90) count90Days++;
-    else if (diffDays >= 60) count60Days++;
-    else if (diffDays >= 30) count30Days++;
-  });
-  
-  document.getElementById('count30Days').textContent = count30Days;
-  document.getElementById('count60Days').textContent = count60Days;
-  document.getElementById('count90Days').textContent = count90Days;
-  
-  // 현재 선택된 경과일 하이라이트
-  document.querySelectorAll('.elapsed-card').forEach(card => {
-    card.classList.remove('active-filter');
-  });
-  
-  if (window.elapsedDayFilter === 30) {
-    document.getElementById('count30Days').parentElement.classList.add('active-filter');
-  } else if (window.elapsedDayFilter === 60) {
-    document.getElementById('count60Days').parentElement.classList.add('active-filter');
-  } else if (window.elapsedDayFilter === 90) {
-    document.getElementById('count90Days').parentElement.classList.add('active-filter');
-  }
-}
 // 테이블 행 생성
 // 테이블 행 생성
 function createTableRow(row, rowIndex = 0) {
