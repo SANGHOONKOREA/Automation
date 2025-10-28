@@ -451,7 +451,7 @@ const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 const basicColumns = [
   'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty',
-  'manager', '현황', '현황번역', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
+  'manager', '현황', '현황번역', 'ai_summary', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
   '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -1388,7 +1388,11 @@ function handleVirtualBodyClick(event) {
       break;
     case 'ai-summary':
       if (uid) {
-        summarizeAndUpdateRow(uid);
+        // AI 요약 버튼이 클릭된 행에서 언어 선택 드롭다운 찾기
+        const rowElement = actionElement.closest('tr');
+        const langSelect = rowElement?.querySelector('select[data-field="ai-language"]');
+        const selectedLang = langSelect ? langSelect.value : currentLanguage;
+        summarizeAndUpdateRow(uid, selectedLang);
       }
       break;
     case 'history': {
@@ -3596,14 +3600,41 @@ function createApiApplyCell(row) {
 // AI 요약 버튼 셀 생성
 function createAiSummaryCell(row) {
   const td = document.createElement('td');
+  td.style.padding = '4px';
+
+  // 언어 선택 드롭다운
+  const langSelect = document.createElement('select');
+  langSelect.style.cssText = 'padding: 4px; margin-bottom: 4px; width: 100%; font-size: 0.9em;';
+  langSelect.dataset.uid = row.uid;
+  langSelect.dataset.field = 'ai-language';
+
+  const languages = [
+    { value: 'ko', text: '한국어' },
+    { value: 'en', text: 'English' },
+    { value: 'zh', text: '中文' },
+    { value: 'ja', text: '日本語' }
+  ];
+
+  languages.forEach(lang => {
+    const option = document.createElement('option');
+    option.value = lang.value;
+    option.textContent = lang.text;
+    langSelect.appendChild(option);
+  });
+
+  // 현재 언어로 기본 선택
+  langSelect.value = currentLanguage;
+
+  td.appendChild(langSelect);
+
+  // AI 요약 버튼
   const btn = document.createElement('button');
   btn.textContent = translations[currentLanguage]["AI 요약"] || "AI 요약";
-  btn.style.background = "#6c757d";
-  btn.style.color = "#fff";
-  btn.style.cursor = "pointer";
+  btn.style.cssText = 'background: #6c757d; color: #fff; cursor: pointer; padding: 6px 10px; width: 100%; border: none; border-radius: 4px; font-size: 0.9em;';
   btn.dataset.action = 'ai-summary';
   btn.dataset.uid = row.uid;
   td.appendChild(btn);
+
   return td;
 }
 
@@ -5228,15 +5259,25 @@ function dateToYMD(ms) {
 /** ==================================
  *  AI 요약 기능
  * ===================================*/
-async function summarizeAndUpdateRow(uid) {
+async function summarizeAndUpdateRow(uid, targetLang = 'ko') {
   const row = asData.find(r => r.uid === uid);
   if (!row) {
     alert("대상 행 없음");
     return;
   }
-  
-  const basePrompt = g_aiConfig.promptRow || "접수내용과 조치결과를 간단히 요약해주세요.";
-  const textOriginal = 
+
+  // 언어별 프롬프트 설정
+  const languageInstructions = {
+    ko: "다음 내용을 한국어로 간단히 요약해주세요.",
+    en: "Please summarize the following content in English.",
+    zh: "请用中文简要总结以下内容。",
+    ja: "以下の内容を日本語で簡潔に要約してください。"
+  };
+
+  const languageInstruction = languageInstructions[targetLang] || languageInstructions['ko'];
+  const basePrompt = g_aiConfig.promptRow || languageInstruction;
+
+  const textOriginal =
     `접수내용:\n${row.접수내용 || "없음"}\n\n` +
     `조치결과:\n${row.조치결과 || "없음"}\n`;
 
@@ -5248,21 +5289,21 @@ async function summarizeAndUpdateRow(uid) {
 
   try {
     const summary = await callAiForSummary(finalPrompt);
-    
+
     if (!summary) {
       alert("AI 요약 실패 (빈 값 반환)");
       return;
     }
-    
+
     row.현황 = summary;
     row.현황번역 = "";
     row["수정일"] = new Date().toISOString().split('T')[0];
-    
+
     modifiedRows.add(uid);
-    
+
     updateSingleRowInTable(uid, { 현황: summary, 현황번역: "", "수정일": row["수정일"] });
-    
-    addHistory(`AI 요약 완료 - [${uid}] 현황 업데이트`);
+
+    addHistory(`AI 요약 완료 - [${uid}] 현황 업데이트 (${targetLang})`);
     alert("AI 요약 결과가 '현황' 필드에 반영되었습니다.");
   } catch (err) {
     console.error("AI 요약 오류:", err);
