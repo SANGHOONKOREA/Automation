@@ -58,6 +58,7 @@ let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
 let historyCountsByProject = new Map();
 let selectedRowUids = new Set();
+let statusHistoryMap = new Map(); // uid -> [{date, content, user}]
 
 let mainUsersData = null;
 let legacyUsersData = null;
@@ -451,7 +452,7 @@ const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 const basicColumns = [
   'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty',
-  'manager', '현황', '현황번역', 'ai_summary', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
+  'manager', '현황', '현황_내역', '현황번역', 'ai_summary', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
   '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -460,7 +461,7 @@ const allColumns = [
   'checkbox', '공번', '시스템', 'imo', 'api_name', 'api_owner', 'api_manager', 'api_apply',
   'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty', 'prevManager',
-  'manager', '현황', '현황번역', 'ai_summary', '조치계획', '접수내용',
+  'manager', '현황', '현황_내역', '현황번역', 'ai_summary', '조치계획', '접수내용',
   '조치결과', 'historyCount', ...historyYearColumns, 'history', 'similarHistory', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -1408,6 +1409,11 @@ function handleVirtualBodyClick(event) {
         }
       }
       break;
+    case 'status-history':
+      if (uid) {
+        showStatusHistoryModal(uid);
+      }
+      break;
     case 'imo-search': {
       const imoInput = actionElement.closest('td')?.querySelector('input[data-field="imo"]');
       const imoVal = imoInput ? imoInput.value.trim() : '';
@@ -1702,6 +1708,7 @@ function renderTableHeaders() {
     'prevManager': { field: 'prevManager', text: '전 담당' },
     'manager': { field: 'manager', text: '현 담당' },
     '현황': { field: '현황', text: '현황' },
+    '현황_내역': { field: null, text: '내역', isStatusHistory: true },
     '현황번역': { field: '현황번역', text: '현황 번역' },
     'ai_summary': { field: null, text: 'AI 요약', isAI: true },
     '조치계획': { field: '조치계획', text: '조치계획' },
@@ -3131,14 +3138,17 @@ function onCellChange(e) {
   row["수정일"] = now;
   
   modifiedRows.add(uid);
-  
+
   if (field === "현황") {
     row.현황번역 = "";
-    
+
     const translationCell = e.target.closest('tr').querySelector('td[data-field="현황번역"] input');
     if (translationCell) {
       translationCell.value = "";
     }
+
+    // 현황 변경 히스토리 저장
+    addStatusHistory(uid, newVal, currentUser);
   }
   
   if (field === "정상지연" || field === "AS접수일자" || field === "기술적종료일") {
@@ -3529,6 +3539,8 @@ function createTableCell(row, columnKey) {
       return createApiApplyCell(row);
     case 'ai_summary':
       return createAiSummaryCell(row);
+    case '현황_내역':
+      return createStatusHistoryCell(row);
     case 'historyCount':
       return createHistoryCountCell(row);
     case 'history':
@@ -3635,6 +3647,18 @@ function createAiSummaryCell(row) {
   btn.dataset.uid = row.uid;
   td.appendChild(btn);
 
+  return td;
+}
+
+// 현황 내역 버튼 셀 생성
+function createStatusHistoryCell(row) {
+  const td = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.textContent = '내역';
+  btn.style.cssText = 'background: #17a2b8; color: #fff; cursor: pointer; padding: 6px 10px; width: 100%; border: none; border-radius: 4px; font-size: 0.9em;';
+  btn.dataset.action = 'status-history';
+  btn.dataset.uid = row.uid;
+  td.appendChild(btn);
   return td;
 }
 
@@ -5302,6 +5326,9 @@ async function summarizeAndUpdateRow(uid, targetLang = 'ko') {
     modifiedRows.add(uid);
 
     updateSingleRowInTable(uid, { 현황: summary, 현황번역: "", "수정일": row["수정일"] });
+
+    // 현황 변경 히스토리 추가
+    addStatusHistory(uid, summary, currentUser);
 
     addHistory(`AI 요약 완료 - [${uid}] 현황 업데이트 (${targetLang})`);
     alert("AI 요약 결과가 '현황' 필드에 반영되었습니다.");
@@ -7628,6 +7655,97 @@ if (window.performance) {
     }, 0);
   });
 }
+
+/** ==================================
+ *  현황 변경 내역 관리 기능
+ * ===================================*/
+
+// 현황 변경 히스토리 추가
+function addStatusHistory(uid, content, user) {
+  if (!statusHistoryMap.has(uid)) {
+    statusHistoryMap.set(uid, []);
+  }
+
+  const history = statusHistoryMap.get(uid);
+  const now = new Date().toISOString().split('T')[0];
+
+  history.push({
+    date: now,
+    content: content,
+    user: user || '알 수 없음'
+  });
+}
+
+// 현황 변경 내역 모달 표시
+function showStatusHistoryModal(uid) {
+  const row = asData.find(r => r.uid === uid);
+  if (!row) {
+    alert("대상 행을 찾을 수 없습니다.");
+    return;
+  }
+
+  const modal = document.getElementById('statusHistoryModal');
+  const content = document.getElementById('statusHistoryContent');
+
+  const history = statusHistoryMap.get(uid) || [];
+
+  let html = '';
+
+  if (history.length === 0) {
+    html = '<p style="text-align: center; color: #666; padding: 20px;">변경 내역이 없습니다.</p>';
+  } else {
+    html = `
+      <div style="margin-bottom: 15px;">
+        <strong>공번:</strong> ${row.공번 || 'N/A'} |
+        <strong>선박명:</strong> ${row.shipName || 'N/A'}
+      </div>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+        <thead>
+          <tr style="background-color: #f8f9fa;">
+            <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">수정일</th>
+            <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">내용</th>
+            <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">등록자</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    // 최신 항목이 위로 오도록 역순으로 표시
+    for (let i = history.length - 1; i >= 0; i--) {
+      const item = history[i];
+      html += `
+        <tr>
+          <td style="border: 1px solid #ddd; padding: 10px;">${item.date}</td>
+          <td style="border: 1px solid #ddd; padding: 10px; max-width: 400px; word-wrap: break-word;">${item.content || '-'}</td>
+          <td style="border: 1px solid #ddd; padding: 10px;">${item.user}</td>
+        </tr>
+      `;
+    }
+
+    html += `
+        </tbody>
+      </table>
+    `;
+  }
+
+  content.innerHTML = html;
+  modal.style.display = 'block';
+  modal.style.zIndex = '10005';
+}
+
+// 현황 변경 내역 모달 닫기
+function closeStatusHistoryModal() {
+  const modal = document.getElementById('statusHistoryModal');
+  modal.style.display = 'none';
+}
+
+// 모달 외부 클릭 시 닫기
+window.addEventListener('click', (event) => {
+  const modal = document.getElementById('statusHistoryModal');
+  if (event.target === modal) {
+    closeStatusHistoryModal();
+  }
+});
 
 console.log('제어 AS 현황 관리 시스템 스크립트 로드 완료');
 console.log('버전: 3.0.0 (개선된 조회 기능, 실시간 필터링, 성능 최적화)');
