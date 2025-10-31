@@ -132,21 +132,8 @@
   </div>
 </div>
 
-<!-- 동작여부 집계 + 경과일 상태 카드 -->
+<!-- 경과일 상태 카드 -->
 <div class="status-summary">
-  <div class="status-card">
-    <h3>정상</h3>
-    <div class="count" id="count정상">0</div>
-  </div>
-  <div class="status-card">
-    <h3>부분동작</h3>
-    <div class="count" id="count부분동작">0</div>
-  </div>
-  <div class="status-card">
-    <h3>동작불가</h3>
-    <div class="count" id="count동작불가">0</div>
-  </div>
-  <!-- 경과일 상태 카드 -->
   <div class="status-card elapsed-card" style="cursor: pointer;">
     <h3>30일경과</h3>
     <div class="count" id="count30Days">0</div>
@@ -520,6 +507,15 @@
       <span class="close" onclick="document.getElementById('apiProgressModal').style.display='none';">&times;</span>
       <h2>API 데이터 가져오기</h2>
       <div id="apiProgressText"></div>
+    </div>
+  </div>
+
+  <!-- 현황 내역 모달 -->
+  <div id="statusHistoryModal">
+    <div class="modal-content">
+      <span class="close" onclick="closeStatusHistoryModal()">&times;</span>
+      <h2>현황 변경 내역</h2>
+      <div id="statusHistoryContent"></div>
     </div>
   </div>
 
