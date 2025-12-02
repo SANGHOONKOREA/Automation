@@ -132,8 +132,21 @@
   </div>
 </div>
 
-<!-- 경과일 상태 카드 -->
+<!-- 동작여부 집계 + 경과일 상태 카드 -->
 <div class="status-summary">
+  <div class="status-card">
+    <h3>정상</h3>
+    <div class="count" id="count정상">0</div>
+  </div>
+  <div class="status-card">
+    <h3>부분동작</h3>
+    <div class="count" id="count부분동작">0</div>
+  </div>
+  <div class="status-card">
+    <h3>동작불가</h3>
+    <div class="count" id="count동작불가">0</div>
+  </div>
+  <!-- 경과일 상태 카드 -->
   <div class="status-card elapsed-card" style="cursor: pointer;">
     <h3>30일경과</h3>
     <div class="count" id="count30Days">0</div>
@@ -152,38 +165,46 @@
   <div class="filters">
     <div class="filter-group">
       <label>IMO NO.</label>
-      <input type="text" id="filterIMO">
+      <input type="text" id="filterIMO" oninput="applyFilters()">
     </div>
     <div class="filter-group">
       <label>HULL NO.</label>
-      <input type="text" id="filterHull">
+      <input type="text" id="filterHull" oninput="applyFilters()">
     </div>
     <div class="filter-group">
       <label>SHIPNAME</label>
-      <input type="text" id="filterName">
+      <input type="text" id="filterName" oninput="applyFilters()">
     </div>
     <div class="filter-group">
       <label>SHIPOWNER</label>
-      <input type="text" id="filterOwner">
+      <input type="text" id="filterOwner" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>인도일(시작)</label>
+      <input type="date" id="filterDeliveryStart">
+    </div>
+    <div class="filter-group">
+      <label>인도일(종료)</label>
+      <input type="date" id="filterDeliveryEnd">
     </div>
     <!-- 호선 대표메일 필터 추가 -->
     <div class="filter-group">
       <label>호선 대표메일</label>
-      <input type="text" id="filterRepMail">
+      <input type="text" id="filterRepMail" oninput="applyFilters()">
     </div>
     <!-- Ship Type 필터 추가 -->
     <div class="filter-group">
       <label>SHIP TYPE</label>
-      <input type="text" id="filterShipType">
+      <input type="text" id="filterShipType" oninput="applyFilters()">
     </div>
     <!-- Shipyard 필터 추가 -->
     <div class="filter-group">
       <label>SHIPYARD</label>
-      <input type="text" id="filterShipyard">
+      <input type="text" id="filterShipyard" oninput="applyFilters()">
     </div>
     <div class="filter-group">
       <label>AS 구분</label>
-      <select id="filterAsType">
+      <select id="filterAsType" onchange="applyFilters()">
         <option value="">전체</option>
         <option value="무상">무상</option>
         <option value="유상">유상</option>
@@ -192,7 +213,16 @@
     </div>
     <div class="filter-group">
       <label>현 담당</label>
-      <input type="text" id="filterManager">
+      <input type="text" id="filterManager" oninput="applyFilters()">
+    </div>
+    <div class="filter-group">
+      <label>동작여부</label>
+      <select id="filterActive" onchange="applyFilters()">
+        <option value="">전체</option>
+        <option value="정상">정상</option>
+        <option value="부분동작">부분동작</option>
+        <option value="동작불가">동작불가</option>
+      </select>
     </div>
     <!-- "전체조회" 버튼 -->
     <div class="filter-group">
@@ -232,6 +262,7 @@
           <th data-field="현황번역">현황 번역<div class="col-resizer"></div></th>
           <!-- AI 요약(단일행) -->
           <th>AI 요약</th>
+          <th data-field="동작여부">동작여부<div class="col-resizer"></div></th>
           <!-- 추가 열들 -->
           <th data-field="조치계획">조치계획<div class="col-resizer"></div></th>
           <th data-field="접수내용">접수내용<div class="col-resizer"></div></th>
@@ -304,7 +335,7 @@
       <hr style="margin:10px 0;">
       <h3>새 사용자 추가</h3>
       <p style="font-size:0.85em; color:#666; margin-top:-6px;">
-        이 페이지에는 추가된 사용자는 Firebase Authentication에서 별도로 계정을 생성해야 로그인할 수 있습니다. Firebase Console → Authentication → Users에서 직접 추가하거나, 사용자에게 회원가입 링크를 안내해주세요.
+        Firebase Authentication에 등록된 이메일만 추가할 수 있습니다.
       </p>
       <div class="form-group">
         <label>이메일</label>
@@ -507,15 +538,6 @@
       <span class="close" onclick="document.getElementById('apiProgressModal').style.display='none';">&times;</span>
       <h2>API 데이터 가져오기</h2>
       <div id="apiProgressText"></div>
-    </div>
-  </div>
-
-  <!-- 현황 내역 모달 -->
-  <div id="statusHistoryModal">
-    <div class="modal-content">
-      <span class="close" onclick="closeStatusHistoryModal()">&times;</span>
-      <h2>현황 변경 내역</h2>
-      <div id="statusHistoryContent"></div>
     </div>
   </div>
 

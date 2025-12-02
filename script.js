@@ -57,33 +57,6 @@ let isExtendedView = false;
 let currentLanguage = 'ko';
 let adminPassword = 'snsys1234';
 let historyCountsByProject = new Map();
-let selectedRowUids = new Set();
-let statusHistoryMap = new Map(); // uid -> [{date, content, user}]
-
-let mainUsersData = null;
-let legacyUsersData = null;
-let userRecords = {};
-let userMetaCache = null;
-
-const PAGE_SIZE = 10000; // Increased for better performance with large datasets
-const LOAD_MORE_OFFSET = 800;
-const VIRTUAL_BUFFER_ROWS = 12;
-let lastLoadedKey = null;
-let hasMoreData = true;
-let isLoadingPage = false;
-let tableWrapper = null;
-let virtualTableBody = null;
-let virtualTopSpacer = null;
-let virtualBottomSpacer = null;
-let virtualRowHeight = 48;
-let virtualRowHeightMeasured = false;
-let needsVirtualMeasurement = false;
-let pendingVirtualRender = null;
-let virtualTableInitialized = false;
-let virtualTableEventsBound = false;
-let lastRenderedStart = -1;
-let lastRenderedEnd = -1;
-let virtualRowsDirty = true;
 
 // 필터 디바운스 타이머
 let filterDebounceTimer = null;
@@ -102,91 +75,6 @@ const pathConfigPath = "as-service/admin/pathConfig";
 const userMetaPath = 'as-service/user_meta';
 const adminPasswordPath = 'as-service/admin/password';
 const legacyUsersPath = 'users';
-
-function normalizeEmail(email) {
-  if (!email || (typeof email !== 'string' && typeof email !== 'number')) {
-    return '';
-  }
-
-  const trimmed = String(email).trim();
-  if (!trimmed || !trimmed.includes('@')) {
-    return '';
-  }
-
-  return trimmed.toLowerCase();
-}
-
-function rebuildUserLookupCaches() {
-  userRecords = {};
-
-  const mergeRecords = (records) => {
-    if (!records || typeof records !== 'object') return;
-
-    for (const [key, value] of Object.entries(records)) {
-      if (!userRecords[key]) {
-        userRecords[key] = value || {};
-      } else {
-        userRecords[key] = {
-          ...(userRecords[key] || {}),
-          ...(value || {})
-        };
-      }
-    }
-  };
-
-  mergeRecords(mainUsersData);
-  mergeRecords(legacyUsersData);
-}
-
-async function loadMainUsersData(force = false) {
-  if (!force && mainUsersData !== null) {
-    return mainUsersData;
-  }
-
-  try {
-    const snapshot = await db.ref(userPath).once('value');
-    mainUsersData = snapshot.val() || {};
-  } catch (error) {
-    console.error('메인 사용자 목록 로드 오류:', error);
-    mainUsersData = {};
-  }
-
-  rebuildUserLookupCaches();
-  return mainUsersData;
-}
-
-async function loadLegacyUsersData(force = false) {
-  if (!force && legacyUsersData !== null) {
-    return legacyUsersData;
-  }
-
-  try {
-    const snapshot = await db.ref(legacyUsersPath).once('value');
-    legacyUsersData = snapshot.val() || {};
-  } catch (error) {
-    console.error('레거시 사용자 목록 로드 오류:', error);
-    legacyUsersData = {};
-  }
-
-  rebuildUserLookupCaches();
-  return legacyUsersData;
-}
-
-async function loadUserMetaCache(force = false) {
-  if (!force && userMetaCache !== null) {
-    return userMetaCache;
-  }
-
-  try {
-    const snapshot = await db.ref(userMetaPath).once('value');
-    userMetaCache = snapshot.val() || {};
-  } catch (error) {
-    console.error('사용자 메타데이터 로드 오류:', error);
-    userMetaCache = {};
-  }
-
-  return userMetaCache;
-}
 
 function sanitizeKey(value = '') {
   return value
@@ -207,160 +95,31 @@ async function fetchUserDirectory() {
   try {
     const primarySnap = await db.ref(userPath).once('value');
     if (primarySnap.exists()) {
-      const primaryData = primarySnap.val() || {};
-      mainUsersData = primaryData;
-      rebuildUserLookupCaches();
-      return { path: userPath, data: primaryData };
+      return { path: userPath, data: primarySnap.val() || {} };
     }
 
     const legacySnap = await db.ref(legacyUsersPath).once('value');
-    const legacyData = legacySnap.val() || {};
-    legacyUsersData = legacyData;
-    rebuildUserLookupCaches();
-    return { path: legacyUsersPath, data: legacyData };
+    return { path: legacyUsersPath, data: legacySnap.val() || {} };
   } catch (error) {
     console.error('사용자 디렉토리 조회 오류:', error);
-    if (mainUsersData === null) mainUsersData = {};
-    if (legacyUsersData === null) legacyUsersData = {};
-    rebuildUserLookupCaches();
     return { path: userPath, data: {} };
   }
 }
 
-async function resolveUidByEmail(email) {
-  const normalized = normalizeEmail(email);
-  if (!normalized) {
-    return null;
-  }
-
-  const findUid = (records) => {
-    if (!records || typeof records !== 'object') return null;
-
-    for (const [uid, data] of Object.entries(records)) {
-      const candidateEmail = normalizeEmail(data?.email || data?.emailAddress);
-      if (candidateEmail && candidateEmail === normalized) {
-        return data?.uid || uid;
+async function findUidByEmail(email) {
+  try {
+    const snapshot = await db.ref(userMetaPath).orderByChild('email').equalTo(email).once('value');
+    if (snapshot.exists()) {
+      const val = snapshot.val();
+      const keys = Object.keys(val);
+      if (keys.length > 0) {
+        return keys[0];
       }
     }
-
-    return null;
-  };
-
-  if (mainUsersData === null || !Object.keys(mainUsersData).length) {
-    await loadMainUsersData();
-  }
-
-  let resolved = findUid(mainUsersData);
-  if (!resolved) {
-    await loadMainUsersData(true);
-    resolved = findUid(mainUsersData);
-  }
-
-  if (resolved) {
-    return resolved;
-  }
-
-  if (!userRecords || !Object.keys(userRecords).length) {
-    await loadLegacyUsersData();
-  }
-
-  resolved = findUid(userRecords);
-  if (!resolved) {
-    await loadLegacyUsersData(true);
-    resolved = findUid(userRecords);
-  }
-
-  if (resolved) {
-    return resolved;
-  }
-
-  if (userMetaCache === null || !Object.keys(userMetaCache).length) {
-    await loadUserMetaCache();
-  }
-
-  resolved = findUid(userMetaCache);
-  if (!resolved) {
-    await loadUserMetaCache(true);
-    resolved = findUid(userMetaCache);
-  }
-
-  return resolved;
-}
-
-async function verifyEmailRegistration(email, existingUid = null) {
-  const normalized = normalizeEmail(email);
-  if (!normalized) {
-    return { registered: false, uid: null };
-  }
-
-  let resolvedUid = existingUid || null;
-
-  if (!resolvedUid) {
-    resolvedUid = await resolveUidByEmail(normalized);
-  }
-
-  if (resolvedUid) {
-    return { registered: true, uid: resolvedUid };
-  }
-
-  try {
-    const methods = await auth.fetchSignInMethodsForEmail(normalized);
-    if (Array.isArray(methods) && methods.length > 0) {
-      return { registered: true, uid: null };
-    }
   } catch (error) {
-    if (error?.code === 'auth/invalid-email') {
-      throw error;
-    }
-    console.warn('이메일 인증 방법 조회 실패:', error);
+    console.error('UID 조회 오류:', error);
   }
-
-  try {
-    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=${firebaseConfig.apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        identifier: normalized,
-        continueUri: (typeof window !== 'undefined' && window?.location?.origin) || 'https://snsys.net'
-      })
-    });
-
-    const data = await response.json();
-
-    if (data?.registered) {
-      return { registered: true, uid: null };
-    }
-
-    const providerLists = [
-      Array.isArray(data?.allProviders) ? data.allProviders : null,
-      Array.isArray(data?.signinMethods) ? data.signinMethods : null,
-      Array.isArray(data?.signInMethods) ? data.signInMethods : null,
-      Array.isArray(data?.signInProviderIds) ? data.signInProviderIds : null,
-      Array.isArray(data?.existingProviderIds) ? data.existingProviderIds : null
-    ].filter(Boolean);
-
-    for (const providers of providerLists) {
-      if (providers.length > 0) {
-        return { registered: true, uid: null };
-      }
-    }
-
-    if (Array.isArray(data?.users) && data.users.length > 0) {
-      const firstUser = data.users.find((user) => normalizeEmail(user?.email) === normalized) || data.users[0];
-      const resolvedUid = firstUser?.localId || firstUser?.uid || null;
-      return { registered: true, uid: resolvedUid || null };
-    }
-
-    if (data?.error) {
-      console.warn('Firebase createAuthUri 오류:', data.error);
-    }
-  } catch (error) {
-    console.error('Firebase 등록 이메일 확인 오류:', error);
-  }
-
-  return { registered: false, uid: null };
+  return null;
 }
 
 async function ensureDefaultAdminUser() {
@@ -374,13 +133,13 @@ async function ensureDefaultAdminUser() {
       return;
     }
 
-    const { registered: emailRegistered, uid: resolvedUid } = await verifyEmailRegistration(defaultEmail);
-    if (!emailRegistered) {
+    const methods = await auth.fetchSignInMethodsForEmail(defaultEmail);
+    if (!methods || methods.length === 0) {
       console.warn('기본 관리자 이메일이 Firebase Authentication에 없습니다:', defaultEmail);
-      console.warn('기본 관리자 계정은 등록되지만 Firebase Authentication에 계정을 생성해야 로그인할 수 있습니다.');
+      return;
     }
 
-    const uid = resolvedUid || await resolveUidByEmail(defaultEmail);
+    const uid = await findUidByEmail(defaultEmail);
     const now = new Date().toISOString();
     const adminEntry = {
       email: defaultEmail,
@@ -396,11 +155,6 @@ async function ensureDefaultAdminUser() {
     }
 
     await userRef.set(adminEntry);
-    mainUsersData = {
-      ...(mainUsersData || {}),
-      [safeKey]: adminEntry
-    };
-    rebuildUserLookupCaches();
     console.log('기본 관리자 계정이 초기화되었습니다.');
   } catch (error) {
     console.error('기본 관리자 초기화 오류:', error);
@@ -448,11 +202,13 @@ const currentYear = new Date().getFullYear();
 const historyYears = Array.from({ length: currentYear - historyStartYear + 1 }, (_, i) => historyStartYear + i);
 const historyYearColumns = historyYears.map(y => `historyCount${y}`);
 
+const DEFAULT_DELIVERY_START = '2020-01-01';
+
 // 기본 테이블 열 정의
 const basicColumns = [
   'checkbox', '공번', '시스템', 'imo', 'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty',
-  'manager', '현황', '현황_내역', '현황번역', 'ai_summary', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
+  'manager', '현황', '현황번역', '동작여부', 'historyCount', 'history', 'similarHistory', 'AS접수일자', '기술적종료일',
   '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -461,7 +217,7 @@ const allColumns = [
   'checkbox', '공번', '시스템', 'imo', 'api_name', 'api_owner', 'api_manager', 'api_apply',
   'hull', 'project', 'shipName', 'repMail', 'shipType', 'shipowner',
   'shipyard', 'asType', 'delivery', 'warranty', 'prevManager',
-  'manager', '현황', '현황_내역', '현황번역', 'ai_summary', '조치계획', '접수내용',
+  'manager', '현황', '현황번역', 'ai_summary', '동작여부', '조치계획', '접수내용',
   '조치결과', 'historyCount', ...historyYearColumns, 'history', 'similarHistory', 'AS접수일자', '기술적종료일', '경과일', '정상지연', '지연 사유', '수정일', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
 ];
 
@@ -520,6 +276,7 @@ const translations = {
     "그룹": "그룹",
     "AS 구분": "AS 구분",
     "현 담당": "현 담당",
+    "동작여부": "동작여부",
     "SHIP TYPE": "SHIP TYPE",
     "SHIPYARD": "SHIPYARD",
     "무상": "무상",
@@ -619,6 +376,7 @@ const translations = {
     "그룹": "Group",
     "AS 구분": "AS Type",
     "현 담당": "Current Manager",
+    "동작여부": "Operation Status",
     "SHIP TYPE": "SHIP TYPE",
     "SHIPYARD": "SHIPYARD",
     "전체": "All",
@@ -721,6 +479,7 @@ const translations = {
     "그룹": "组别",
     "AS 구분": "AS类型",
     "현 담당": "当前负责人",
+    "동작여부": "运行状态",
     "SHIP TYPE": "船舶类型",
     "SHIPYARD": "造船厂",
     "무상": "免费",
@@ -822,6 +581,7 @@ const translations = {
     "그룹": "グループ",
     "AS 구분": "AS区分",
     "현 담당": "現担当者",
+    "동작여부": "動作状態",
     "SHIP TYPE": "船舶タイプ",
     "SHIPYARD": "造船所",
     "무상": "無償",
@@ -885,8 +645,30 @@ document.addEventListener('DOMContentLoaded', () => {
   ensureDefaultAdminUser();
 });
 
+function initializeDeliveryDateFilters() {
+  const startInput = document.getElementById('filterDeliveryStart');
+  const endInput = document.getElementById('filterDeliveryEnd');
+  if (!startInput || !endInput) return;
+
+  const todayStr = toYMD(new Date());
+
+  if (!startInput.value) {
+    startInput.value = DEFAULT_DELIVERY_START;
+  }
+
+  if (!endInput.value) {
+    endInput.value = todayStr;
+  }
+
+  const onDateFilterChange = () => applyFilters();
+  startInput.addEventListener('change', onDateFilterChange);
+  endInput.addEventListener('change', onDateFilterChange);
+}
+
 // 모든 이벤트 리스너 등록 함수
 function registerEventListeners() {
+  initializeDeliveryDateFilters();
+
   // 사이드바 관련
   document.getElementById('btnManager').addEventListener('click', () => switchSideMode('manager'));
   document.getElementById('btnOwner').addEventListener('click', () => switchSideMode('owner'));
@@ -1053,11 +835,10 @@ function registerEventListeners() {
   
   // 경과일 상태 카드 클릭 이벤트 리스너
   setupElapsedDayFilters();
-
-  initializeVirtualTable();
 }
 
-// Operation status filters removed for performance optimization
+// 동작여부 상태 카드 클릭 이벤트 리스너 추가
+setupOperationStatusFilters();
 
 // 개선된 필터 이벤트 리스너 설정
 function setupFilterEventListeners() {
@@ -1068,7 +849,7 @@ function setupFilterEventListeners() {
   ];
 
   const filterSelects = [
-    'filterAsType'
+    'filterAsType', 'filterActive'
   ];
   
   // 텍스트 입력 필터
@@ -1088,7 +869,40 @@ function setupFilterEventListeners() {
   });
 }
 
-// Operation status filters removed for performance optimization
+// 동작여부 상태 필터 설정
+function setupOperationStatusFilters() {
+  // 정상 카드 클릭
+  document.getElementById('count정상').parentElement.addEventListener('click', () => {
+    filterByOperationStatus('정상');
+  });
+  
+  // 부분동작 카드 클릭
+  document.getElementById('count부분동작').parentElement.addEventListener('click', () => {
+    filterByOperationStatus('부분동작');
+  });
+  
+  // 동작불가 카드 클릭
+  document.getElementById('count동작불가').parentElement.addEventListener('click', () => {
+    filterByOperationStatus('동작불가');
+  });
+}
+
+// 동작여부별 필터링
+function filterByOperationStatus(status) {
+  // 현재 선택된 동작여부와 같으면 해제, 다르면 적용
+  const currentStatus = document.getElementById('filterActive').value;
+  
+  if (currentStatus === status) {
+    // 같은 상태를 다시 클릭하면 필터 해제
+    document.getElementById('filterActive').value = '';
+  } else {
+    // 다른 상태를 클릭하면 해당 상태로 필터 설정
+    document.getElementById('filterActive').value = status;
+  }
+  
+  // 필터 적용 (기존 필터 조건 유지)
+  applyFilters();
+}
 
 // 필터 변경 핸들러 - 디바운스 적용
 function handleFilterChange() {
@@ -1101,19 +915,52 @@ function handleFilterChange() {
   }, 300); // 300ms 디바운스
 }
 
-// applyFilters 함수 수정 - 경과일 필터 추가
-async function applyFilters(options = {}) {
-  const { skipEnsureAll = false, preserveScroll = false, forceMeasure = false } = options;
+function parseDateForFilter(value) {
+  if (!value && value !== 0) return null;
 
-  if (asData.length === 0) {
-    filteredData = [];
-    updateTable({ forceMeasure: true });
+  if (value instanceof Date) {
+    const normalized = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    return isNaN(normalized.getTime()) ? null : normalized;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const dateFromSerial = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+    return isNaN(dateFromSerial.getTime())
+      ? null
+      : new Date(dateFromSerial.getFullYear(), dateFromSerial.getMonth(), dateFromSerial.getDate());
+  }
+
+  let str = String(value).trim();
+  if (!str || str === '#N/A') return null;
+
+  str = str.replace(/[./]/g, '-').replace(/\//g, '-');
+
+  if (/^\d{8}$/.test(str)) {
+    str = `${str.slice(0, 4)}-${str.slice(4, 6)}-${str.slice(6, 8)}`;
+  }
+
+  const simpleMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (simpleMatch) {
+    const [, y, m, d] = simpleMatch;
+    const dateObj = new Date(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T00:00:00`);
+    return isNaN(dateObj.getTime()) ? null : dateObj;
+  }
+
+  const parsed = new Date(str.includes('T') ? str : `${str}T00:00:00`);
+  if (isNaN(parsed.getTime())) return null;
+
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+// applyFilters 함수 수정 - 경과일 필터 추가
+function applyFilters() {
+  if (!dataLoaded || asData.length === 0) {
+    console.log('데이터가 아직 로드되지 않았습니다.');
     return;
   }
 
-  const tableScrollContainer = document.getElementById('tableWrapper');
-  const previousScrollTop = preserveScroll && tableScrollContainer ? tableScrollContainer.scrollTop : 0;
-
+  // 필터값 수집
   const filters = {
     imo: document.getElementById('filterIMO').value.toLowerCase().trim(),
     hull: document.getElementById('filterHull').value.toLowerCase().trim(),
@@ -1122,100 +969,121 @@ async function applyFilters(options = {}) {
     repMail: document.getElementById('filterRepMail').value.toLowerCase().trim(),
     asType: document.getElementById('filterAsType').value,
     manager: document.getElementById('filterManager').value.toLowerCase().trim(),
+    active: document.getElementById('filterActive').value,
     shipType: document.getElementById('filterShipType').value.toLowerCase().trim(),
     shipyard: document.getElementById('filterShipyard').value.toLowerCase().trim()
   };
 
+  const deliveryStartInput = document.getElementById('filterDeliveryStart');
+  const deliveryEndInput = document.getElementById('filterDeliveryEnd');
+  const deliveryStartDate = deliveryStartInput ? parseDateForFilter(deliveryStartInput.value) : null;
+  const deliveryEndDate = deliveryEndInput ? parseDateForFilter(deliveryEndInput.value) : null;
+  const deliveryStartTime = deliveryStartDate ? deliveryStartDate.getTime() : null;
+  const deliveryEndTime = deliveryEndDate ? deliveryEndDate.getTime() : null;
+
+  // 경과일 필터 추가
   const elapsedDayFilter = window.elapsedDayFilter || null;
 
-  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null;
-
-  if (hasActiveFilter && hasMoreData && !skipEnsureAll) {
-    await ensureAllDataLoaded();
-  }
-
-  const sourceData = asData;
+  // 모든 필터가 비어있는지 확인 (경과일 필터 포함)
+  const hasDateFilter = deliveryStartTime !== null || deliveryEndTime !== null;
+  const hasActiveFilter = Object.values(filters).some(val => val !== '') || elapsedDayFilter !== null || hasDateFilter;
 
   if (!hasActiveFilter) {
-    filteredData = [...sourceData];
-  } else {
-    filteredData = sourceData.filter(row => {
-      if (!row || !row.uid) return false;
-
-      const hasValidData = row.공번 || row.시스템 || row.imo || row.hull || row.project || row.shipName || row.manager || row.shipowner;
-      if (!hasValidData) return false;
-
-      if (elapsedDayFilter !== null) {
-        if (row["기술적종료일"]) return false;
-        if (!row["AS접수일자"]) return false;
-
-        const today = new Date();
-        const asDate = new Date(row["AS접수일자"] + "T00:00");
-        if (isNaN(asDate.getTime())) return false;
-
-        const diffDays = Math.floor((today - asDate) / (1000 * 3600 * 24));
-        if (diffDays < elapsedDayFilter) return false;
-      }
-
-      if (filters.imo && !String(row.imo || '').toLowerCase().includes(filters.imo)) {
-        return false;
-      }
-
-      if (filters.hull && !String(row.hull || '').toLowerCase().includes(filters.hull)) {
-        return false;
-      }
-
-      if (filters.name && !String(row.shipName || '').toLowerCase().includes(filters.name)) {
-        return false;
-      }
-
-      if (filters.owner && !String(row.shipowner || '').toLowerCase().includes(filters.owner)) {
-        return false;
-      }
-
-      if (filters.repMail && !String(row.repMail || '').toLowerCase().includes(filters.repMail)) {
-        return false;
-      }
-
-      if (filters.asType && row.asType !== filters.asType) {
-        return false;
-      }
-
-      if (filters.manager && !String(row.manager || '').toLowerCase().includes(filters.manager)) {
-        return false;
-      }
-
-      if (filters.shipType && !String(row.shipType || '').toLowerCase().includes(filters.shipType)) {
-        return false;
-      }
-
-      if (filters.shipyard && !String(row.shipyard || '').toLowerCase().includes(filters.shipyard)) {
-        return false;
-      }
-
-      return true;
-    });
+    // 필터가 없으면 빈 화면 표시
+    filteredData = [];
+    updateTable();
+    return;
   }
+  
+  // 필터링 실행
+  filteredData = asData.filter(row => {
+    // 빈 데이터 필터링
+    if (!row || !row.uid) return false;
+    
+    // 최소한의 데이터가 있는지 확인
+    const hasValidData = row.공번 || row.시스템 || row.imo || row.hull || row.project || row.shipName || row.manager || row.shipowner;
+    if (!hasValidData) return false;
+    
+    // 경과일 필터 적용
+    if (elapsedDayFilter !== null) {
+      if (row["기술적종료일"]) return false;
+      if (!row["AS접수일자"]) return false;
+      
+      const today = new Date();
+      const asDate = new Date(row["AS접수일자"] + "T00:00");
+      if (isNaN(asDate.getTime())) return false;
+      
+      const diffDays = Math.floor((today - asDate) / (1000 * 3600 * 24));
+      if (diffDays < elapsedDayFilter) return false;
+    }
+    
+    // 기존 필터들 적용
+    if (filters.imo && !String(row.imo || '').toLowerCase().includes(filters.imo)) {
+      return false;
+    }
+    
+    if (filters.hull && !String(row.hull || '').toLowerCase().includes(filters.hull)) {
+      return false;
+    }
+    
+    if (filters.name && !String(row.shipName || '').toLowerCase().includes(filters.name)) {
+      return false;
+    }
+    
+    if (filters.owner && !String(row.shipowner || '').toLowerCase().includes(filters.owner)) {
+      return false;
+    }
+    
+    if (filters.repMail && !String(row.repMail || '').toLowerCase().includes(filters.repMail)) {
+      return false;
+    }
+    
+    if (filters.asType && row.asType !== filters.asType) {
+      return false;
+    }
+    
+    if (filters.manager && !String(row.manager || '').toLowerCase().includes(filters.manager)) {
+      return false;
+    }
+    
+    if (filters.active && row.동작여부 !== filters.active) {
+      return false;
+    }
+    
+    if (filters.shipType && !String(row.shipType || '').toLowerCase().includes(filters.shipType)) {
+      return false;
+    }
+    
+    if (filters.shipyard && !String(row.shipyard || '').toLowerCase().includes(filters.shipyard)) {
+      return false;
+    }
 
+    if (hasDateFilter) {
+      const deliveryDate = parseDateForFilter(row.delivery);
+      if (!deliveryDate) return false;
+
+      const deliveryTime = deliveryDate.getTime();
+      if (deliveryStartTime !== null && deliveryTime < deliveryStartTime) {
+        return false;
+      }
+
+      if (deliveryEndTime !== null && deliveryTime > deliveryEndTime) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+  
   console.log(`필터링 결과: ${filteredData.length}개`);
-
-  const filteredUidSet = new Set(filteredData.map(row => row.uid));
-  selectedRowUids = new Set(Array.from(selectedRowUids).filter(uid => filteredUidSet.has(uid)));
-
+  
+  // 정렬 적용
   if (sortField) {
     applySorting();
   }
-
-  const shouldForceMeasure = forceMeasure || !virtualRowHeightMeasured;
-  updateTable({ forceMeasure: shouldForceMeasure });
-
-  if (tableScrollContainer) {
-    if (preserveScroll) {
-      tableScrollContainer.scrollTop = previousScrollTop;
-    } else {
-      tableScrollContainer.scrollTop = 0;
-    }
-  }
+  
+  // 테이블 업데이트
+  updateTable();
 }
 
 // 정렬 적용 함수
@@ -1250,347 +1118,62 @@ function applySorting() {
   });
 }
 
-function initializeVirtualTable() {
-  if (virtualTableInitialized && tableWrapper && virtualTableBody) {
-    updateVirtualSpacerColspan();
-    return true;
-  }
-
-  tableWrapper = document.getElementById('tableWrapper');
-  virtualTableBody = document.getElementById('asBody');
-
-  if (!tableWrapper || !virtualTableBody) {
-    return false;
-  }
-
-  bindVirtualTableEvents();
-
-  virtualTableBody.innerHTML = '';
-  virtualTopSpacer = createVirtualSpacerRow();
-  virtualBottomSpacer = createVirtualSpacerRow();
-  virtualTableBody.appendChild(virtualTopSpacer);
-  virtualTableBody.appendChild(virtualBottomSpacer);
-
-  tableWrapper.addEventListener('scroll', handleVirtualScroll, { passive: true });
-  window.addEventListener('resize', handleVirtualResize);
-
-  updateVirtualSpacerColspan();
-  virtualRowHeightMeasured = false;
-  needsVirtualMeasurement = true;
-  virtualTableInitialized = true;
-
-  return true;
-}
-
-function createVirtualSpacerRow() {
-  const tr = document.createElement('tr');
-  tr.className = 'virtual-spacer';
-  const td = document.createElement('td');
-  td.style.padding = '0';
-  td.style.border = 'none';
-  td.style.height = '0px';
-  td.colSpan = Math.max(document.querySelectorAll('#asTable thead th').length, 1);
-  tr.appendChild(td);
-  return tr;
-}
-
-function updateVirtualSpacerColspan() {
-  if (!virtualTopSpacer || !virtualBottomSpacer) return;
-  const columnCount = Math.max(document.querySelectorAll('#asTable thead th').length, 1);
-  [virtualTopSpacer, virtualBottomSpacer].forEach(spacer => {
-    const cell = spacer.firstChild || spacer.appendChild(document.createElement('td'));
-    cell.colSpan = columnCount;
-    cell.style.padding = '0';
-    cell.style.border = 'none';
-  });
-}
-
-function clearRenderedVirtualRows() {
-  if (!virtualTableBody || !virtualTopSpacer || !virtualBottomSpacer) return;
-  while (virtualTopSpacer.nextSibling && virtualTopSpacer.nextSibling !== virtualBottomSpacer) {
-    virtualTableBody.removeChild(virtualTopSpacer.nextSibling);
-  }
-  resetVirtualRange();
-}
-
-function bindVirtualTableEvents() {
-  if (!virtualTableBody || virtualTableEventsBound) return;
-
-  virtualTableBody.addEventListener('change', handleVirtualTableChange);
-  virtualTableBody.addEventListener('click', handleVirtualBodyClick);
-
-  virtualTableEventsBound = true;
-}
-
-function resetVirtualRange() {
-  lastRenderedStart = -1;
-  lastRenderedEnd = -1;
-  virtualRowsDirty = true;
-}
-
-function handleVirtualTableChange(event) {
-  const target = event.target;
-  if (!target) return;
-
-  if (target.classList.contains('rowSelectChk')) {
-    const uid = target.dataset.uid;
-    if (!uid) return;
-
-    if (target.checked) {
-      selectedRowUids.add(uid);
-    } else {
-      selectedRowUids.delete(uid);
-    }
-    updateSelectAllState();
-    return;
-  }
-
-  const uid = target.dataset.uid;
-  const field = target.dataset.field;
-  if (uid && field) {
-    onCellChange(event);
-  }
-}
-
-function handleVirtualBodyClick(event) {
-  const target = event.target;
-  if (!target) return;
-
-  const actionElement = target.closest('[data-action]');
-  if (!actionElement) return;
-
-  const action = actionElement.dataset.action;
-  if (!action) return;
-
-  if (action === 'open-content-modal') {
-    const uid = actionElement.dataset.uid;
-    const field = actionElement.dataset.contentField;
-    if (!uid || !field) return;
-
-    const row = asData.find(item => item && item.uid === uid);
-    const value = row ? row[field] || '' : '';
-    openContentModalAsWindow(value);
-    return;
-  }
-
-  let uid = actionElement.dataset.uid;
-  if (!uid) {
-    const rowElement = actionElement.closest('tr');
-    if (rowElement) {
-      uid = rowElement.dataset.uid;
-    }
-  }
-
-  switch (action) {
-    case 'api-apply':
-      if (uid) {
-        fetchAndUpdateVesselData(uid);
-      }
-      break;
-    case 'ai-summary':
-      if (uid) {
-        // AI 요약 버튼이 클릭된 행에서 언어 선택 드롭다운 찾기
-        const rowElement = actionElement.closest('tr');
-        const langSelect = rowElement?.querySelector('select[data-field="ai-language"]');
-        const selectedLang = langSelect ? langSelect.value : currentLanguage;
-        summarizeAndUpdateRow(uid, selectedLang);
-      }
-      break;
-    case 'history': {
-      const project = actionElement.dataset.project || '';
-      showHistoryDataWithFullscreen(project);
-      break;
-    }
-    case 'similar-history':
-      if (uid) {
-        const row = asData.find(item => item && item.uid === uid);
-        if (row) {
-          handleSimilarHistorySearch(row);
-        }
-      }
-      break;
-    case 'status-history':
-      if (uid) {
-        showStatusHistoryModal(uid);
-      }
-      break;
-    case 'imo-search': {
-      const imoInput = actionElement.closest('td')?.querySelector('input[data-field="imo"]');
-      const imoVal = imoInput ? imoInput.value.trim() : '';
-      if (imoVal) {
-        window.open('https://www.vesselfinder.com/vessels/details/' + encodeURIComponent(imoVal), '_blank');
-      }
-      break;
-    }
-    case 'imo-drawing': {
-      const imoInput = actionElement.closest('td')?.querySelector('input[data-field="imo"]');
-      const imoVal = imoInput ? imoInput.value.trim() : '';
-      if (imoVal) {
-        openPdfDrawing(imoVal);
-      }
-      break;
-    }
-    case 'imo-backup': {
-      const imoInput = actionElement.closest('td')?.querySelector('input[data-field="imo"]');
-      const imoVal = imoInput ? imoInput.value.trim() : '';
-      if (imoVal) {
-        openBackupSoftwarePath(imoVal);
-      }
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-function scheduleVirtualRender(forceMeasure = false) {
-  if (forceMeasure) {
-    virtualRowHeightMeasured = false;
-    needsVirtualMeasurement = true;
-    virtualRowsDirty = true;
-  }
-
-  if (pendingVirtualRender) return;
-
-  pendingVirtualRender = requestAnimationFrame(() => {
-    pendingVirtualRender = null;
-    renderVirtualRows();
-  });
-}
-
-function renderVirtualRows() {
-  if (!virtualTableInitialized) {
-    if (!initializeVirtualTable()) {
-      return;
-    }
-  }
-
-  if (!tableWrapper || !virtualTableBody || !virtualTopSpacer || !virtualBottomSpacer) return;
-
-  updateVirtualSpacerColspan();
-
-  const totalRows = filteredData.length;
-  const topCell = virtualTopSpacer.firstChild;
-  const bottomCell = virtualBottomSpacer.firstChild;
-
-  if (totalRows === 0) {
-    clearRenderedVirtualRows();
-    if (topCell) topCell.style.height = '0px';
-    if (bottomCell) bottomCell.style.height = '0px';
-    return;
-  }
-
-  if (!virtualRowHeightMeasured || needsVirtualMeasurement) {
-    measureVirtualRowHeight();
-    needsVirtualMeasurement = false;
-  }
-
-  const rowHeight = Math.max(virtualRowHeight, 1);
-  const scrollTop = tableWrapper.scrollTop;
-  const viewportHeight = tableWrapper.clientHeight;
-  const visibleCount = Math.ceil(viewportHeight / rowHeight) + VIRTUAL_BUFFER_ROWS * 2;
-
-  let startIndex = Math.floor(scrollTop / rowHeight) - VIRTUAL_BUFFER_ROWS;
-  if (startIndex < 0) startIndex = 0;
-  let endIndex = Math.min(totalRows, startIndex + visibleCount);
-  if (endIndex < totalRows && endIndex - startIndex < visibleCount) {
-    startIndex = Math.max(0, endIndex - visibleCount);
-  }
-
-  if (!virtualRowsDirty && startIndex === lastRenderedStart && endIndex === lastRenderedEnd) {
-    if (topCell) topCell.style.height = `${startIndex * rowHeight}px`;
-    if (bottomCell) bottomCell.style.height = `${Math.max(totalRows - endIndex, 0) * rowHeight}px`;
-    return;
-  }
-
-  const fragment = document.createDocumentFragment();
-  for (let i = startIndex; i < endIndex; i++) {
-    const tr = createTableRow(filteredData[i], i);
-    fragment.appendChild(tr);
-  }
-
-  clearRenderedVirtualRows();
-  virtualTableBody.insertBefore(fragment, virtualBottomSpacer);
-
-  if (topCell) topCell.style.height = `${startIndex * rowHeight}px`;
-  if (bottomCell) bottomCell.style.height = `${Math.max(totalRows - endIndex, 0) * rowHeight}px`;
-
-  virtualRowsDirty = false;
-  lastRenderedStart = startIndex;
-  lastRenderedEnd = endIndex;
-}
-
-function measureVirtualRowHeight() {
-  if (!virtualTableBody || filteredData.length === 0) {
-    return;
-  }
-
-  const sampleRow = createTableRow(filteredData[0], 0);
-  sampleRow.style.visibility = 'hidden';
-  virtualTableBody.insertBefore(sampleRow, virtualBottomSpacer);
-  const measuredHeight = sampleRow.getBoundingClientRect().height;
-  virtualRowHeight = measuredHeight > 0 ? measuredHeight : virtualRowHeight;
-  virtualRowHeightMeasured = true;
-  virtualTableBody.removeChild(sampleRow);
-}
-
-function handleVirtualScroll() {
-  scheduleVirtualRender();
-  maybeLoadMoreData();
-}
-
-function handleVirtualResize() {
-  scheduleVirtualRender(true);
-}
-
-function maybeLoadMoreData() {
-  if (!tableWrapper || !hasMoreData || isLoadingPage) return;
-  const distanceToBottom = tableWrapper.scrollHeight - (tableWrapper.scrollTop + tableWrapper.clientHeight);
-  if (distanceToBottom > LOAD_MORE_OFFSET) return;
-
-  loadData({ silent: true }).then(async loaded => {
-    if (loaded > 0) {
-      await applyFilters({ skipEnsureAll: true, preserveScroll: true });
-    }
-  }).catch(error => {
-    console.error('추가 데이터 로드 실패:', error);
-  });
-}
-
-// 테이블 업데이트 함수 - 가상 스크롤 적용
-function updateTable(options = {}) {
-  const { forceMeasure = false } = options;
-
+// 테이블 업데이트 함수 - 최적화
+function updateTable() {
   if (isTableRendering) return;
   isTableRendering = true;
-
+  
   try {
+    // 헤더 렌더링
     renderTableHeaders();
-
-    initializeVirtualTable();
-
-    // Operation status counting removed for performance optimization
+    
+    // 바디 렌더링
+    const tbody = document.getElementById('asBody');
+    tbody.innerHTML = '';
+    
+    // 상태 집계
+    const counts = {정상: 0, 부분동작: 0, 동작불가: 0};
+    
+    // DocumentFragment 사용하여 성능 향상
+    const fragment = document.createDocumentFragment();
+    
+    filteredData.forEach(row => {
+      if (counts.hasOwnProperty(row.동작여부)) {
+        counts[row.동작여부]++;
+      }
+      const tr = createTableRow(row);
+      fragment.appendChild(tr);
+    });
+    
+    tbody.appendChild(fragment);
+    
+    // 상태 업데이트
+    updateStatusCounts(counts);
     updateElapsedDayCounts();
     updateSidebarList();
-
-    resetVirtualRange();
-    scheduleVirtualRender(forceMeasure);
-    updateSelectAllState();
-    refreshVisibleCheckboxStates();
+    
   } finally {
     isTableRendering = false;
   }
 }
 
 // 전체 데이터 로드 및 표시
-async function loadAllData() {
-  if (asData.length === 0) {
+function loadAllData() {
+  if (!dataLoaded || asData.length === 0) {
     console.log('데이터가 아직 로드되지 않았습니다.');
     return;
   }
-
-  await ensureAllDataLoaded();
-  await applyFilters({ skipEnsureAll: true, forceMeasure: true });
+  
+  // 전체 데이터를 필터링된 데이터로 설정
+  filteredData = [...asData];
+  
+  // 정렬 적용
+  if (sortField) {
+    applySorting();
+  }
+  
+  // 테이블 업데이트
+  updateTable();
 }
 
 // 전체조회 버튼 함수도 수정
@@ -1602,8 +1185,13 @@ function clearAllFilters() {
   document.getElementById('filterRepMail').value = '';
   document.getElementById('filterAsType').value = '';
   document.getElementById('filterManager').value = '';
+  document.getElementById('filterActive').value = '';
   document.getElementById('filterShipType').value = '';
   document.getElementById('filterShipyard').value = '';
+  const deliveryStartInput = document.getElementById('filterDeliveryStart');
+  const deliveryEndInput = document.getElementById('filterDeliveryEnd');
+  if (deliveryStartInput) deliveryStartInput.value = '';
+  if (deliveryEndInput) deliveryEndInput.value = '';
 
   // 경과일 필터도 초기화
   window.elapsedDayFilter = null;
@@ -1625,17 +1213,24 @@ async function loadAdminPassword() {
   }
 }
 
-// 관리자 권한 확인 함수 (역할 기반)
+// 관리자 비밀번호 확인 함수
 function checkAdminPassword(callback) {
-  if (!currentUser) {
-    alert("로그인이 필요합니다.");
+  if (adminAuthorized) {
+    callback();
     return;
   }
 
-  if (currentUser.role === '관리자') {
+  const passwordInput = prompt("관리자 비밀번호를 입력하세요:");
+  if (passwordInput === null) return;
+
+  if (passwordInput === adminPassword) {
+    adminAuthorized = true;
+    setTimeout(() => {
+      adminAuthorized = false;
+    }, 5 * 60 * 1000);
     callback();
   } else {
-    alert("관리자 권한이 필요합니다.");
+    alert("관리자 비밀번호가 올바르지 않습니다.");
   }
 }
 
@@ -1648,9 +1243,9 @@ function switchTableView(extended) {
   // 버튼 상태 변경
   document.getElementById('basicViewBtn').classList.toggle('active', !extended);
   document.getElementById('extendedViewBtn').classList.toggle('active', extended);
-
+  
   // 현재 필터링된 데이터로 테이블 다시 렌더링
-  updateTable({ forceMeasure: true });
+  updateTable();
 }
 
 // 경과일 필터 설정
@@ -1708,9 +1303,9 @@ function renderTableHeaders() {
     'prevManager': { field: 'prevManager', text: '전 담당' },
     'manager': { field: 'manager', text: '현 담당' },
     '현황': { field: '현황', text: '현황' },
-    '현황_내역': { field: null, text: '내역', isStatusHistory: true },
     '현황번역': { field: '현황번역', text: '현황 번역' },
     'ai_summary': { field: null, text: 'AI 요약', isAI: true },
+    '동작여부': { field: '동작여부', text: '동작여부' },
     '조치계획': { field: '조치계획', text: '조치계획' },
     '접수내용': { field: '접수내용', text: '접수내용' },
     '조치결과': { field: '조치결과', text: '조치결과' },
@@ -1884,6 +1479,7 @@ function updateUILanguage() {
     '그룹': ['그룹', 'Group', '组别', 'グループ'],
     'AS 구분': ['AS 구분', 'AS Type', 'AS类型', 'AS区分'],
     '현 담당': ['현 담당', 'Current Manager', '当前负责人', '現担当者'],
+    '동작여부': ['동작여부', 'Operation Status', '运行状态', '動作状態'],
     'SHIP TYPE': ['SHIP TYPE', 'SHIP TYPE', '船舶类型', '船舶タイプ'],
     'SHIPYARD': ['SHIPYARD', 'SHIPYARD', '造船厂', '造船所']
   };
@@ -1978,7 +1574,18 @@ function updateSelectOptions(langData) {
       else if (value === "위탁") option.textContent = langData["위탁"] || "위탁";
     });
   }
-
+  
+  const activeFilter = document.getElementById('filterActive');
+  if (activeFilter) {
+    Array.from(activeFilter.options).forEach(option => {
+      const value = option.value;
+      if (!value) option.textContent = langData["전체"] || "전체";
+      else if (value === "정상") option.textContent = langData["정상"] || "정상";
+      else if (value === "부분동작") option.textContent = langData["부분동작"] || "부분동작";
+      else if (value === "동작불가") option.textContent = langData["동작불가"] || "동작불가";
+    });
+  }
+  
 }
 
 /** ==================================
@@ -2069,9 +1676,8 @@ function resetInterface() {
   document.getElementById('loginUser').value = '';
   document.getElementById('loginPw').value = '';
   document.getElementById('loginError').textContent = '';
-
+  
   asData = [];
-  selectedRowUids.clear();
   dataLoaded = false;
 }
 
@@ -2079,14 +1685,14 @@ function resetInterface() {
 function showMainInterface() {
   document.getElementById('sidebar').classList.remove('hidden');
   document.getElementById('mainContainer').classList.remove('hidden');
-
+  
   if (!dataLoaded) {
-    dataLoaded = true;
     testConnection();
-    initializeData();
+    loadData();
     loadAiConfig();
     loadApiConfig();
     loadPathConfig();
+    dataLoaded = true;
   }
 }
 
@@ -2162,7 +1768,7 @@ function performLogin() {
           errorMsg = "비밀번호가 올바르지 않습니다.";
           break;
         case 'auth/user-not-found':
-          errorMsg = "이 페이지에는 추가된 사용자는 Firebase Authentication에서 별도로 계정을 생성해야 로그인할 수 있습니다. Firebase Console → Authentication → Users에서 직접 추가하거나, 사용자에게 회원가입 링크를 안내해주세요.";
+          errorMsg = "등록되지 않은 이메일입니다.";
           break;
         case 'auth/invalid-email':
           errorMsg = "유효하지 않은 이메일 형식입니다.";
@@ -2377,7 +1983,7 @@ function sendPasswordResetEmail() {
       let errorMsg = '이메일 전송 중 오류가 발생했습니다.';
       
       if (error.code === 'auth/user-not-found') {
-        errorMsg = '이메일과 연결된 Firebase Authentication 계정을 찾을 수 없습니다. Firebase Console → Authentication → Users에서 계정을 생성하거나, 사용자에게 회원가입 링크를 안내해주세요.';
+        errorMsg = '해당 이메일로 등록된 사용자가 없습니다.';
       } else if (error.code === 'auth/invalid-email') {
         errorMsg = '유효하지 않은 이메일 형식입니다.';
       }
@@ -2511,10 +2117,10 @@ async function addNewUser() {
   }
 
   try {
-    const { registered: emailRegistered, uid: resolvedUid } = await verifyEmailRegistration(email);
-
-    if (!emailRegistered) {
-      console.warn('Authentication에서 이메일을 찾을 수 없습니다:', email);
+    const methods = await auth.fetchSignInMethodsForEmail(email);
+    if (!methods || methods.length === 0) {
+      alert('Firebase Authentication에 등록된 계정이 아닙니다.');
+      return;
     }
 
     const safeKey = sanitizeKey(email);
@@ -2522,10 +2128,7 @@ async function addNewUser() {
     const existingSnap = await userRef.once('value');
     const existingData = existingSnap.val();
 
-    let uid = existingData?.uid || resolvedUid;
-    if (!uid) {
-      uid = await resolveUidByEmail(email);
-    }
+    const uid = existingData?.uid || await findUidByEmail(email);
     const now = new Date().toISOString();
 
     const newEntry = {
@@ -2543,22 +2146,14 @@ async function addNewUser() {
 
     await userRef.set(newEntry);
 
-    let alertMessage = existingData ? '사용자 정보가 업데이트되었습니다.' : '사용자가 등록되었습니다.';
-    if (!emailRegistered) {
-      alertMessage += '\n\n이 사용자가 로그인하려면 Firebase Authentication에 계정을 생성해야 합니다. Firebase Console → Authentication → Users에서 직접 추가하거나, 사용자에게 회원가입 링크를 안내해주세요.';
-    }
-
-    alert(alertMessage);
+    alert(existingData ? '사용자 정보가 업데이트되었습니다.' : '사용자가 등록되었습니다.');
 
     if (emailInput) emailInput.value = '';
     if (managerInput) managerInput.value = '';
     if (roleSelect) roleSelect.value = '담당자';
 
     const refreshedSnap = await db.ref(userPath).once('value');
-    const refreshedData = refreshedSnap.val() || {};
-    mainUsersData = refreshedData;
-    rebuildUserLookupCaches();
-    userData = convertSnapshotToArray(refreshedData);
+    userData = convertSnapshotToArray(refreshedSnap.val() || {});
     renderUserList();
   } catch (error) {
     console.error('사용자 추가 오류:', error);
@@ -2916,148 +2511,60 @@ function assignHistoryCountsToRows(countMap = new Map(), rows = asData) {
   });
 }
 
-async function loadData(options = {}) {
-  const { reset = false, silent = false } = options;
+async function loadData() {
+  const snap = await db.ref(asPath).once('value');
+  const val = snap.val() || {};
 
-  if (isLoadingPage) {
-    return 0;
-  }
+  asData = [];
+  Object.keys(val).forEach(key => {
+    const r = val[key];
 
-  if (reset) {
-    lastLoadedKey = null;
-    hasMoreData = true;
-    asData = [];
-    filteredData = [];
-    selectedRowUids.clear();
-    virtualRowHeightMeasured = false;
-    needsVirtualMeasurement = true;
+    // 빈 객체이거나 유효하지 않은 데이터는 건너뛰기
+    if (!r || typeof r !== 'object') return;
 
-    if (virtualTopSpacer && virtualBottomSpacer && virtualTableBody) {
-      clearRenderedVirtualRows();
-      const topCell = virtualTopSpacer.firstChild;
-      const bottomCell = virtualBottomSpacer.firstChild;
-      if (topCell) topCell.style.height = '0px';
-      if (bottomCell) bottomCell.style.height = '0px';
-    }
-  }
+    // 최소한 하나 이상의 필수 필드가 있는지 확인
+    const hasRequiredFields = r.공번 || r.공사 || r.시스템 || r.imo || r.hull || r.shipName || r.manager || r.shipowner;
+    if (!hasRequiredFields) return;
 
-  if (!hasMoreData) {
-    return 0;
-  }
+    // uid가 없으면 key를 uid로 설정
+    if (!r.uid) r.uid = key;
 
-  isLoadingPage = true;
+    // 호환 처리
+    if (r["현 담당"] && !r.manager) r.manager = r["현 담당"];
+    if (r["SHIPOWNER"] && !r.shipowner) r.shipowner = r["SHIPOWNER"];
+    if (!('시스템' in r)) r.시스템 = r.공사 || '';
+    if ('공사' in r) delete r.공사;
+    if (!('project' in r)) r.project = '';
+    if (!("AS접수일자" in r)) r["AS접수일자"] = "";
+    if (!("정상지연" in r)) r["정상지연"] = "";
+    if (!("지연 사유" in r)) r["지연 사유"] = "";
+    if (!("수정일" in r)) r["수정일"] = "";
+    if (!("api_name" in r)) r["api_name"] = "";
+    if (!("api_owner" in r)) r["api_owner"] = "";
+    if (!("api_manager" in r)) r["api_manager"] = "";
+    if (!("현황번역" in r)) r["현황번역"] = "";
+    if (!('hwType' in r)) r.hwType = '';
+    if (!('software' in r)) r.software = '';
+    if (!('cpuRomVer' in r)) r.cpuRomVer = '';
+    if (!('rauRomVer' in r)) r.rauRomVer = '';
 
-  try {
-    let query = db.ref(asPath).orderByKey();
-    const canUseStartAfter = typeof query.startAfter === 'function';
-
-    if (lastLoadedKey) {
-      query = canUseStartAfter ? query.startAfter(lastLoadedKey) : query.startAt(lastLoadedKey);
-    }
-
-    const fetchLimit = PAGE_SIZE + (lastLoadedKey && !canUseStartAfter ? 1 : 0);
-    query = query.limitToFirst(fetchLimit);
-
-    const snapshot = await query.once('value');
-    const rawValue = snapshot.val() || {};
-    let entries = Object.entries(rawValue);
-    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-
-    if (lastLoadedKey && !canUseStartAfter) {
-      entries = entries.filter(([key]) => key !== lastLoadedKey);
+    // 동작여부 값 변환
+    if (r.동작여부 === "정상A" || r.동작여부 === "정상B" || r.동작여부 === "유상정상") {
+      r.동작여부 = "정상";
     }
 
-    if (entries.length === 0) {
-      hasMoreData = false;
-      return 0;
-    }
+    r.historyCounts = createEmptyHistoryCounts();
+    asData.push(r);
+  });
 
-    const newRows = [];
+  console.log(`데이터 로드 완료: 총 ${asData.length}개 (원본: ${Object.keys(val).length}개)`);
 
-    entries.forEach(([key, value]) => {
-      const row = value;
-      if (!row || typeof row !== 'object') return;
+  await loadHistoryCounts();
+  loadHistoryEmbeddingIndex().catch(err => console.error('히스토리 임베딩 사전 로드 오류:', err));
 
-      const hasRequiredFields = row.공번 || row.공사 || row.시스템 || row.imo || row.hull || row.shipName || row.manager || row.shipowner;
-      if (!hasRequiredFields) return;
-
-      if (!row.uid) row.uid = key;
-
-      if (row["현 담당"] && !row.manager) row.manager = row["현 담당"];
-      if (row["SHIPOWNER"] && !row.shipowner) row.shipowner = row["SHIPOWNER"];
-      if (!('시스템' in row)) row.시스템 = row.공사 || '';
-      if ('공사' in row) delete row.공사;
-      if (!('project' in row)) row.project = '';
-      if (!("AS접수일자" in row)) row["AS접수일자"] = "";
-      if (!("정상지연" in row)) row["정상지연"] = "";
-      if (!("지연 사유" in row)) row["지연 사유"] = "";
-      if (!("수정일" in row)) row["수정일"] = "";
-      if (!("api_name" in row)) row["api_name"] = "";
-      if (!("api_owner" in row)) row["api_owner"] = "";
-      if (!("api_manager" in row)) row["api_manager"] = "";
-      if (!("현황번역" in row)) row["현황번역"] = "";
-      if (!('hwType' in row)) row.hwType = '';
-      if (!('software' in row)) row.software = '';
-      if (!('cpuRomVer' in row)) row.cpuRomVer = '';
-      if (!('rauRomVer' in row)) row.rauRomVer = '';
-
-      row.historyCounts = createEmptyHistoryCounts();
-      newRows.push(row);
-    });
-
-    if (newRows.length === 0) {
-      if (entries.length < fetchLimit) {
-        hasMoreData = false;
-      }
-      return 0;
-    }
-
-    asData = asData.concat(newRows);
-    lastLoadedKey = entries[entries.length - 1][0];
-
-    if (entries.length < fetchLimit) {
-      hasMoreData = false;
-    }
-
-    if (historyCountsByProject && historyCountsByProject.size > 0) {
-      assignHistoryCountsToRows(historyCountsByProject, newRows);
-    }
-
-    updateSidebarList();
-
-    if (!silent) {
-      await applyFilters({ skipEnsureAll: true, preserveScroll: true });
-    }
-
-    return newRows.length;
-  } catch (error) {
-    console.error('데이터 로드 오류:', error);
-    throw error;
-  } finally {
-    isLoadingPage = false;
-  }
-}
-
-async function ensureAllDataLoaded() {
-  // Optimized: Load all remaining data in larger chunks
-  while (hasMoreData) {
-    const loaded = await loadData({ silent: true });
-    if (!loaded) {
-      break;
-    }
-  }
-  console.log(`Total data loaded: ${asData.length} rows`);
-}
-
-async function initializeData() {
-  try {
-    await loadData({ reset: true, silent: true });
-    await loadHistoryCounts();
-    loadHistoryEmbeddingIndex().catch(err => console.error('히스토리 임베딩 사전 로드 오류:', err));
-    await applyFilters({ skipEnsureAll: true, forceMeasure: true });
-  } catch (error) {
-    console.error('초기 데이터 로드 오류:', error);
-  }
+  dataLoaded = true;
+  updateSidebarList();
+  applyFilters();
 }
 
 // 히스토리 건수 로드
@@ -3138,17 +2645,14 @@ function onCellChange(e) {
   row["수정일"] = now;
   
   modifiedRows.add(uid);
-
+  
   if (field === "현황") {
     row.현황번역 = "";
-
+    
     const translationCell = e.target.closest('tr').querySelector('td[data-field="현황번역"] input');
     if (translationCell) {
       translationCell.value = "";
     }
-
-    // 현황 변경 히스토리 저장
-    addStatusHistory(uid, newVal, currentUser);
   }
   
   if (field === "정상지연" || field === "AS접수일자" || field === "기술적종료일") {
@@ -3264,7 +2768,7 @@ function addNewRow() {
     uid,
     공번: '', 시스템: '', imo: '', hull: '', project: '', shipName: '', shipowner: '', repMail: '',
     shipType: '', shipyard: '', asType: '유상', delivery: '', warranty: '',
-    prevManager: '', manager: '', 현황: '', 현황번역: '',
+    prevManager: '', manager: '', 현황: '', 현황번역: '', 동작여부: '정상',
     조치계획: '', 접수내용: '', 조치결과: '',
     "AS접수일자": '',
     "기술적종료일": '',
@@ -3290,20 +2794,14 @@ function addNewRow() {
 
 // 선택 행 삭제
 async function deleteSelectedRows() {
-  const selected = Array.from(selectedRowUids);
-  if (!selected.length) {
+  const cks = document.querySelectorAll('.rowSelectChk:checked');
+  if (!cks.length) {
     alert("삭제할 행을 선택하세요.");
     return;
   }
   if (!confirm("정말 삭제하시겠습니까?")) return;
-
-  const visibleUidSet = new Set(filteredData.map(row => row.uid));
-  const uidsToDelete = selected.filter(uid => visibleUidSet.size === 0 || visibleUidSet.has(uid));
-
-  if (!uidsToDelete.length) {
-    alert('현재 화면에 표시된 항목 중 삭제할 행이 없습니다.');
-    return;
-  }
+  
+  const uidsToDelete = Array.from(cks).map(chk => chk.dataset.uid);
   
   try {
     // Firebase에서 삭제할 항목들을 null로 설정
@@ -3324,8 +2822,8 @@ async function deleteSelectedRows() {
     }
     
     // 체크박스 초기화
-    selectedRowUids.clear();
-
+    document.getElementById('selectAll').checked = false;
+    
     // 테이블 업데이트
     updateTable();
     
@@ -3340,63 +2838,16 @@ async function deleteSelectedRows() {
   } catch (error) {
     console.error("삭제 중 오류 발생:", error);
     alert("삭제 중 오류가 발생했습니다: " + error.message);
-
+    
     // 오류 발생 시 데이터 다시 로드
-    initializeData();
+    loadData();
   }
-}
-
-function refreshVisibleCheckboxStates() {
-  if (!virtualTableBody) return;
-
-  virtualTableBody.querySelectorAll('.rowSelectChk').forEach(chk => {
-    const uid = chk.dataset.uid;
-    chk.checked = selectedRowUids.has(uid);
-  });
-}
-
-function updateSelectAllState() {
-  const selectAllCheckbox = document.getElementById('selectAll');
-  if (!selectAllCheckbox) return;
-
-  const total = filteredData.length;
-  if (total === 0) {
-    selectAllCheckbox.checked = false;
-    selectAllCheckbox.indeterminate = false;
-    return;
-  }
-
-  let selectedCount = 0;
-  filteredData.forEach(row => {
-    if (row && selectedRowUids.has(row.uid)) {
-      selectedCount++;
-    }
-  });
-
-  selectAllCheckbox.checked = selectedCount === total && total > 0;
-  selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < total;
 }
 
 // 모든 체크박스 선택/해제
 function toggleSelectAll(e) {
-  const shouldSelectAll = e.target.checked;
-
-  if (shouldSelectAll) {
-    filteredData.forEach(row => {
-      if (row && row.uid) {
-        selectedRowUids.add(row.uid);
-      }
-    });
-  } else {
-    filteredData.forEach(row => {
-      if (row && row.uid) {
-        selectedRowUids.delete(row.uid);
-      }
-    });
-  }
-
-  updateSelectAllState();
-  refreshVisibleCheckboxStates();
+  const cks = document.querySelectorAll('.rowSelectChk');
+  cks.forEach(c => c.checked = e.target.checked);
 }
 
 // 테이블 클릭 이벤트 핸들러
@@ -3431,9 +2882,27 @@ function handleTableClick(e) {
   }
 }
 
-// Operation status counts removed for performance optimization
+// 상태 카드 업데이트 시 선택 상태 표시
 function updateStatusCounts(counts) {
-  // Operation status display removed
+  document.getElementById('count정상').textContent = counts.정상 || 0;
+  document.getElementById('count부분동작').textContent = counts.부분동작 || 0;
+  document.getElementById('count동작불가').textContent = counts.동작불가 || 0;
+  
+  // 현재 선택된 동작여부 하이라이트
+  const currentStatus = document.getElementById('filterActive').value;
+  document.querySelectorAll('.status-card').forEach((card, index) => {
+    if (index < 3) { // 처음 3개가 동작여부 카드
+      card.classList.remove('active-filter');
+    }
+  });
+  
+  if (currentStatus === '정상') {
+    document.getElementById('count정상').parentElement.classList.add('active-filter');
+  } else if (currentStatus === '부분동작') {
+    document.getElementById('count부분동작').parentElement.classList.add('active-filter');
+  } else if (currentStatus === '동작불가') {
+    document.getElementById('count동작불가').parentElement.classList.add('active-filter');
+  }
 }
 
 
@@ -3477,13 +2946,9 @@ function updateElapsedDayCounts() {
 }
 // 테이블 행 생성
 // 테이블 행 생성
-function createTableRow(row, rowIndex = 0) {
+function createTableRow(row) {
   const tr = document.createElement('tr');
-  if (row && row.uid) {
-    tr.dataset.uid = row.uid;
-  }
-  tr.dataset.index = rowIndex;
-
+  
   const columnsToShow = isExtendedView ? allColumns : basicColumns;
 
   columnsToShow.forEach(columnKey => {
@@ -3518,6 +2983,17 @@ function createTableRow(row, rowIndex = 0) {
       });
     }
   }
+  
+  // 동작여부 셀 강조
+  const activeCell = tr.querySelector('td[data-field="동작여부"]');
+  if (activeCell) {
+    if (row.기술적종료일 && ["부분동작", "동작불가"].includes(row.동작여부)) {
+      activeCell.style.backgroundColor = 'yellow';
+    }
+    if (row.접수내용 && !row.기술적종료일 && row.동작여부 === "정상") {
+      activeCell.style.backgroundColor = 'lightgreen';
+    }
+  }
 
   return tr;
 }
@@ -3538,9 +3014,14 @@ function createTableCell(row, columnKey) {
     case 'api_apply':
       return createApiApplyCell(row);
     case 'ai_summary':
-      return createAiSummaryCell(row);
-    case '현황_내역':
-      return createStatusHistoryCell(row);
+      // AI 요약 버튼 직접 생성
+      const aiTd = document.createElement('td');
+      const aiBtn = document.createElement('button');
+      aiBtn.textContent = translations[currentLanguage]["AI 요약"] || "AI 요약";
+      aiBtn.style.cssText = 'background: #6c757d; color: #fff; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;';
+      aiBtn.addEventListener('click', () => summarizeAndUpdateRow(row.uid));
+      aiTd.appendChild(aiBtn);
+      return aiTd;
     case 'historyCount':
       return createHistoryCountCell(row);
     case 'history':
@@ -3566,7 +3047,7 @@ function createTableCell(row, columnKey) {
         'hull', 'project', 'shipName', 'repMail', 'shipType',
         'shipowner', 'shipyard', 'asType',
         'delivery', 'warranty', 'prevManager', 'manager', '현황', '현황번역',
-        '조치계획', '접수내용', '조치결과', 'AS접수일자', '기술적종료일',
+        '동작여부', '조치계획', '접수내용', '조치결과', 'AS접수일자', '기술적종료일',
         '지연 사유', 'hwType', 'software', 'cpuRomVer', 'rauRomVer'
       ];
       
@@ -3587,7 +3068,6 @@ function createCheckboxCell(row) {
   chk.type = 'checkbox';
   chk.classList.add('rowSelectChk');
   chk.dataset.uid = row.uid;
-  chk.checked = selectedRowUids.has(row.uid);
   td.appendChild(chk);
   return td;
 }
@@ -3603,8 +3083,7 @@ function createApiApplyCell(row) {
   btn.style.border = "none";
   btn.style.borderRadius = "4px";
   btn.style.padding = "4px 8px";
-  btn.dataset.action = 'api-apply';
-  btn.dataset.uid = row.uid;
+  btn.addEventListener('click', () => fetchAndUpdateVesselData(row.uid));
   td.appendChild(btn);
   return td;
 }
@@ -3612,52 +3091,12 @@ function createApiApplyCell(row) {
 // AI 요약 버튼 셀 생성
 function createAiSummaryCell(row) {
   const td = document.createElement('td');
-  td.style.padding = '4px';
-
-  // 언어 선택 드롭다운
-  const langSelect = document.createElement('select');
-  langSelect.style.cssText = 'padding: 4px; margin-bottom: 4px; width: 100%; font-size: 0.9em;';
-  langSelect.dataset.uid = row.uid;
-  langSelect.dataset.field = 'ai-language';
-
-  const languages = [
-    { value: 'ko', text: '한국어' },
-    { value: 'en', text: 'English' },
-    { value: 'zh', text: '中文' },
-    { value: 'ja', text: '日本語' }
-  ];
-
-  languages.forEach(lang => {
-    const option = document.createElement('option');
-    option.value = lang.value;
-    option.textContent = lang.text;
-    langSelect.appendChild(option);
-  });
-
-  // 현재 언어로 기본 선택
-  langSelect.value = currentLanguage;
-
-  td.appendChild(langSelect);
-
-  // AI 요약 버튼
   const btn = document.createElement('button');
   btn.textContent = translations[currentLanguage]["AI 요약"] || "AI 요약";
-  btn.style.cssText = 'background: #6c757d; color: #fff; cursor: pointer; padding: 6px 10px; width: 100%; border: none; border-radius: 4px; font-size: 0.9em;';
-  btn.dataset.action = 'ai-summary';
-  btn.dataset.uid = row.uid;
-  td.appendChild(btn);
-
-  return td;
-}
-
-// 현황 내역 버튼 셀 생성
-function createStatusHistoryCell(row) {
-  const td = document.createElement('td');
-  const btn = document.createElement('button');
-  btn.textContent = '내역';
-  btn.style.cssText = 'background: #17a2b8; color: #fff; cursor: pointer; padding: 6px 10px; width: 100%; border: none; border-radius: 4px; font-size: 0.9em;';
-  btn.dataset.action = 'status-history';
-  btn.dataset.uid = row.uid;
+  btn.style.background = "#6c757d";
+  btn.style.color = "#fff";
+  btn.style.cursor = "pointer";
+  btn.addEventListener('click', () => summarizeAndUpdateRow(row.uid));
   td.appendChild(btn);
   return td;
 }
@@ -3670,8 +3109,7 @@ function createHistoryCell(row) {
   btn.style.background = "#007bff";
   btn.style.color = "#fff";
   btn.style.cursor = "pointer";
-  btn.dataset.action = 'history';
-  btn.dataset.project = row.공번 || '';
+  btn.addEventListener('click', () => showHistoryDataWithFullscreen(row.공번));
   td.appendChild(btn);
   return td;
 }
@@ -3687,8 +3125,7 @@ function createSimilarHistoryCell(row) {
   btn.style.border = "none";
   btn.style.borderRadius = "4px";
   btn.style.padding = "4px 8px";
-  btn.dataset.action = 'similar-history';
-  btn.dataset.uid = row.uid;
+  btn.addEventListener('click', () => handleSimilarHistorySearch(row));
   td.appendChild(btn);
   return td;
 }
@@ -3770,6 +3207,7 @@ function createNormalDelayCell(row) {
   check.dataset.uid = row.uid;
   check.dataset.field = "정상지연";
   check.checked = (row["정상지연"] === "Y");
+  check.addEventListener('change', onCellChange);
   td.appendChild(check);
   return td;
 }
@@ -3798,6 +3236,7 @@ function createDataCell(row, field) {
     inp.value = value;
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
+    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
   } else if (field === 'asType') {
     const sel = document.createElement('select');
@@ -3810,6 +3249,20 @@ function createDataCell(row, field) {
     sel.value = value || '유상';
     sel.dataset.uid = row.uid;
     sel.dataset.field = field;
+    sel.addEventListener('change', onCellChange);
+    td.appendChild(sel);
+  } else if (field === '동작여부') {
+    const sel = document.createElement('select');
+    ['정상', '부분동작', '동작불가'].forEach(op => {
+      const o = document.createElement('option');
+      o.value = op;
+      o.textContent = op;
+      sel.appendChild(o);
+    });
+    sel.value = value || '정상';
+    sel.dataset.uid = row.uid;
+    sel.dataset.field = field;
+    sel.addEventListener('change', onCellChange);
     td.appendChild(sel);
   } else if (field === 'imo') {
     const inp = document.createElement('input');
@@ -3818,6 +3271,7 @@ function createDataCell(row, field) {
     inp.style.width = '55%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
+    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
 
     const linkIcon = document.createElement('span');
@@ -3825,7 +3279,12 @@ function createDataCell(row, field) {
     linkIcon.style.cursor = 'pointer';
     linkIcon.title = '새 창에서 조회';
     linkIcon.classList.add('imo-action-icon');
-    linkIcon.dataset.action = 'imo-search';
+    linkIcon.addEventListener('click', () => {
+      const imoVal = inp.value.trim();
+      if (imoVal) {
+        window.open('https://www.vesselfinder.com/vessels/details/' + encodeURIComponent(imoVal), '_blank');
+      }
+    });
     td.appendChild(linkIcon);
 
     const drawingIcon = document.createElement('span');
@@ -3833,7 +3292,12 @@ function createDataCell(row, field) {
     drawingIcon.style.cursor = 'pointer';
     drawingIcon.title = '도면 경로 복사';
     drawingIcon.classList.add('imo-action-icon');
-    drawingIcon.dataset.action = 'imo-drawing';
+    drawingIcon.addEventListener('click', () => {
+      const imoVal = inp.value.trim();
+      if (imoVal) {
+        openPdfDrawing(imoVal);
+      }
+    });
     td.appendChild(drawingIcon);
 
     const backupIcon = document.createElement('span');
@@ -3841,7 +3305,12 @@ function createDataCell(row, field) {
     backupIcon.style.cursor = 'pointer';
     backupIcon.title = '백업 경로 복사';
     backupIcon.classList.add('imo-action-icon');
-    backupIcon.dataset.action = 'imo-backup';
+    backupIcon.addEventListener('click', () => {
+      const imoVal = inp.value.trim();
+      if (imoVal) {
+        openBackupSoftwarePath(imoVal);
+      }
+    });
     td.appendChild(backupIcon);
   } else if (['조치계획', '접수내용', '조치결과'].includes(field)) {
     const inp = document.createElement('input');
@@ -3851,9 +3320,7 @@ function createDataCell(row, field) {
     inp.readOnly = true;
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
-    td.dataset.action = 'open-content-modal';
-    td.dataset.uid = row.uid;
-    td.dataset.contentField = field;
+    td.addEventListener('click', () => openContentModalAsWindow(value));
     td.appendChild(inp);
   } else if (['api_name', 'api_owner', 'api_manager'].includes(field)) {
     const inp = document.createElement('input');
@@ -3880,6 +3347,7 @@ function createDataCell(row, field) {
     inp.style.width = '95%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
+    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
   } else {
     const inp = document.createElement('input');
@@ -3888,6 +3356,7 @@ function createDataCell(row, field) {
     inp.style.width = '95%';
     inp.dataset.uid = row.uid;
     inp.dataset.field = field;
+    inp.addEventListener('change', onCellChange);
     td.appendChild(inp);
   }
   
@@ -4828,6 +4297,7 @@ function downloadExcel() {
           '현 담당': d.manager,
           현황: d.현황,
           현황번역: d.현황번역,
+          동작여부: d.동작여부,
           조치계획: d.조치계획,
           접수내용: d.접수내용,
           조치결과: d.조치결과,
@@ -4851,7 +4321,7 @@ function downloadExcel() {
       const templateHeaders = [
         '공번', '시스템', 'IMO', 'HULL', 'PROJECT', 'SHIPNAME', 'SHIPOWNER',
         'API_NAME', 'API_OWNER', 'API_MANAGER', '호선 대표메일', 'SHIP TYPE', 'SHIPYARD', 'AS 구분',
-        '인도일', '보증종료일', '전 담당', '현 담당', '현황', '현황번역', '조치계획', '접수내용',
+        '인도일', '보증종료일', '전 담당', '현 담당', '현황', '현황번역', '동작여부', '조치계획', '접수내용',
         '조치결과', 'AS접수건수', 'H/W TYPE', 'SOFTWARE', 'CPU ROM VER', 'RAU ROM VER'
       ];
       const trailingHeaders = ['AS접수일자', '기술적종료일', '정상지연', '지연 사유', '수정일'];
@@ -4969,6 +4439,7 @@ function readExcelFile(file, mode) {
             manager: parseCell(r['현 담당']),
             현황: parseCell(r['현황']),
             현황번역: parseCell(r['현황번역']),
+            동작여부: normalizeOperationStatus(parseCell(r['동작여부']) || '정상'),
             조치계획: parseCell(r['조치계획']),
             접수내용: parseCell(r['접수내용']),
             조치결과: parseCell(r['조치결과']),
@@ -5042,6 +4513,21 @@ function readExcelFile(file, mode) {
   };
   
   reader.readAsArrayBuffer(file);
+}
+
+function normalizeOperationStatus(status) {
+  switch (status) {
+    case '정상A':
+    case '정상B':
+    case '유상정상':
+      return '정상';
+    case '부분동작':
+      return '부분동작';
+    case '동작불가':
+      return '동작불가';
+    default:
+      return '정상';
+  }
 }
 
 function parseCell(v) {
@@ -5283,25 +4769,15 @@ function dateToYMD(ms) {
 /** ==================================
  *  AI 요약 기능
  * ===================================*/
-async function summarizeAndUpdateRow(uid, targetLang = 'ko') {
+async function summarizeAndUpdateRow(uid) {
   const row = asData.find(r => r.uid === uid);
   if (!row) {
     alert("대상 행 없음");
     return;
   }
-
-  // 언어별 프롬프트 설정
-  const languageInstructions = {
-    ko: "다음 내용을 한국어로 간단히 요약해주세요.",
-    en: "Please summarize the following content in English.",
-    zh: "请用中文简要总结以下内容。",
-    ja: "以下の内容を日本語で簡潔に要約してください。"
-  };
-
-  const languageInstruction = languageInstructions[targetLang] || languageInstructions['ko'];
-  const basePrompt = g_aiConfig.promptRow || languageInstruction;
-
-  const textOriginal =
+  
+  const basePrompt = g_aiConfig.promptRow || "접수내용과 조치결과를 간단히 요약해주세요.";
+  const textOriginal = 
     `접수내용:\n${row.접수내용 || "없음"}\n\n` +
     `조치결과:\n${row.조치결과 || "없음"}\n`;
 
@@ -5313,24 +4789,21 @@ async function summarizeAndUpdateRow(uid, targetLang = 'ko') {
 
   try {
     const summary = await callAiForSummary(finalPrompt);
-
+    
     if (!summary) {
       alert("AI 요약 실패 (빈 값 반환)");
       return;
     }
-
+    
     row.현황 = summary;
     row.현황번역 = "";
     row["수정일"] = new Date().toISOString().split('T')[0];
-
+    
     modifiedRows.add(uid);
-
+    
     updateSingleRowInTable(uid, { 현황: summary, 현황번역: "", "수정일": row["수정일"] });
-
-    // 현황 변경 히스토리 추가
-    addStatusHistory(uid, summary, currentUser);
-
-    addHistory(`AI 요약 완료 - [${uid}] 현황 업데이트 (${targetLang})`);
+    
+    addHistory(`AI 요약 완료 - [${uid}] 현황 업데이트`);
     alert("AI 요약 결과가 '현황' 필드에 반영되었습니다.");
   } catch (err) {
     console.error("AI 요약 오류:", err);
@@ -7356,8 +6829,8 @@ async function translateStatusField() {
     return;
   }
   
-  const targetRows = (filteredData.length > 0 ? filteredData : asData).filter(row => row && row.uid);
-  if (targetRows.length === 0) {
+  const rows = document.querySelectorAll('#asBody tr');
+  if (rows.length === 0) {
     alert('번역할 데이터가 없습니다.');
     return;
   }
@@ -7382,38 +6855,39 @@ async function translateStatusField() {
   progressIndicator.className = 'translation-progress';
   progressIndicator.innerHTML = `
     <div class="translation-spinner"></div>
-    <div>${targetLangName}로 번역 중... (0/${targetRows.length})</div>
+    <div>${targetLangName}로 번역 중... (0/${rows.length})</div>
   `;
   document.body.appendChild(progressIndicator);
-
+  
   document.getElementById('asTable').classList.add('translating');
   document.getElementById('translateBtn').disabled = true;
-
+  
   try {
     const updates = {};
     let successCount = 0;
     let errorCount = 0;
-
-    for (let i = 0; i < targetRows.length; i++) {
-      const rowData = targetRows[i];
-
+    
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      
       try {
-        const uid = rowData.uid;
+        const checkbox = row.querySelector('.rowSelectChk');
+        if (!checkbox) continue;
+        
+        const uid = checkbox.dataset.uid;
         if (!uid) continue;
-
-        const rowElement = document.querySelector(`tr[data-uid="${uid}"]`);
-        const statusInput = rowElement ? rowElement.querySelector('td[data-field="현황"] input') : null;
-        const originalText = statusInput && statusInput.value.trim()
-          ? statusInput.value.trim()
-          : String(rowData.현황 || '').trim();
-
-        if (!originalText) continue;
-
-        rowData.현황 = originalText;
-
+        
+        const statusCell = row.querySelector('td[data-field="현황"] input');
+        if (!statusCell || !statusCell.value.trim()) continue;
+        
+        const originalText = statusCell.value.trim();
+        
+        const rowData = asData.find(r => r.uid === uid);
+        if (!rowData) continue;
+        
         const currentTranslationKey = `현황번역_${currentLanguage}`;
         if (rowData[currentTranslationKey] && rowData.현황 === originalText) {
-          const translationCell = rowElement ? rowElement.querySelector('td[data-field="현황번역"] input') : null;
+          const translationCell = row.querySelector('td[data-field="현황번역"] input');
           if (translationCell) {
             translationCell.value = rowData[currentTranslationKey];
           }
@@ -7421,13 +6895,13 @@ async function translateStatusField() {
         } else {
           try {
             const translatedText = await translateText(originalText, translationDirection.to);
-
+            
             if (translatedText && translatedText.trim()) {
-              const translationCell = rowElement ? rowElement.querySelector('td[data-field="현황번역"] input') : null;
+              const translationCell = row.querySelector('td[data-field="현황번역"] input');
               if (translationCell) {
                 translationCell.value = translatedText;
               }
-
+              
               rowData.현황번역 = translatedText;
               rowData[currentTranslationKey] = translatedText;
               updates[`${asPath}/${uid}/현황번역`] = translatedText;
@@ -7442,10 +6916,10 @@ async function translateStatusField() {
             errorCount++;
           }
         }
-
-        progressIndicator.querySelector('div:last-child').textContent =
-          `${targetLangName}로 번역 중... (${i+1}/${targetRows.length}) - 성공: ${successCount}, 실패: ${errorCount}`;
-
+        
+        progressIndicator.querySelector('div:last-child').textContent = 
+          `${targetLangName}로 번역 중... (${i+1}/${rows.length}) - 성공: ${successCount}, 실패: ${errorCount}`;
+        
       } catch (rowError) {
         console.error(`행 ${i+1} 처리 오류:`, rowError);
         errorCount++;
@@ -7655,97 +7129,6 @@ if (window.performance) {
     }, 0);
   });
 }
-
-/** ==================================
- *  현황 변경 내역 관리 기능
- * ===================================*/
-
-// 현황 변경 히스토리 추가
-function addStatusHistory(uid, content, user) {
-  if (!statusHistoryMap.has(uid)) {
-    statusHistoryMap.set(uid, []);
-  }
-
-  const history = statusHistoryMap.get(uid);
-  const now = new Date().toISOString().split('T')[0];
-
-  history.push({
-    date: now,
-    content: content,
-    user: user || '알 수 없음'
-  });
-}
-
-// 현황 변경 내역 모달 표시
-function showStatusHistoryModal(uid) {
-  const row = asData.find(r => r.uid === uid);
-  if (!row) {
-    alert("대상 행을 찾을 수 없습니다.");
-    return;
-  }
-
-  const modal = document.getElementById('statusHistoryModal');
-  const content = document.getElementById('statusHistoryContent');
-
-  const history = statusHistoryMap.get(uid) || [];
-
-  let html = '';
-
-  if (history.length === 0) {
-    html = '<p style="text-align: center; color: #666; padding: 20px;">변경 내역이 없습니다.</p>';
-  } else {
-    html = `
-      <div style="margin-bottom: 15px;">
-        <strong>공번:</strong> ${row.공번 || 'N/A'} |
-        <strong>선박명:</strong> ${row.shipName || 'N/A'}
-      </div>
-      <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
-        <thead>
-          <tr style="background-color: #f8f9fa;">
-            <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">수정일</th>
-            <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">내용</th>
-            <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">등록자</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-
-    // 최신 항목이 위로 오도록 역순으로 표시
-    for (let i = history.length - 1; i >= 0; i--) {
-      const item = history[i];
-      html += `
-        <tr>
-          <td style="border: 1px solid #ddd; padding: 10px;">${item.date}</td>
-          <td style="border: 1px solid #ddd; padding: 10px; max-width: 400px; word-wrap: break-word;">${item.content || '-'}</td>
-          <td style="border: 1px solid #ddd; padding: 10px;">${item.user}</td>
-        </tr>
-      `;
-    }
-
-    html += `
-        </tbody>
-      </table>
-    `;
-  }
-
-  content.innerHTML = html;
-  modal.style.display = 'block';
-  modal.style.zIndex = '10005';
-}
-
-// 현황 변경 내역 모달 닫기
-function closeStatusHistoryModal() {
-  const modal = document.getElementById('statusHistoryModal');
-  modal.style.display = 'none';
-}
-
-// 모달 외부 클릭 시 닫기
-window.addEventListener('click', (event) => {
-  const modal = document.getElementById('statusHistoryModal');
-  if (event.target === modal) {
-    closeStatusHistoryModal();
-  }
-});
 
 console.log('제어 AS 현황 관리 시스템 스크립트 로드 완료');
 console.log('버전: 3.0.0 (개선된 조회 기능, 실시간 필터링, 성능 최적화)');
